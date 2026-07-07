@@ -157,7 +157,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         controller.window?.setFrame(note.frame, display: true)
         controllers[note.id] = controller
+        // 淡入出现
+        controller.window?.alphaValue = 0
         controller.window?.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            controller.window?.animator().alphaValue = 1
+        }
         if note.mode != .desktop {
             controller.window?.makeKey()
         }

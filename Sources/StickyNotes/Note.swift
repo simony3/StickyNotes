@@ -16,31 +16,42 @@ enum NoteTheme: String, Codable, CaseIterable {
         }
     }
 
-    /// 便签主体背景色 (浅色)
+    /// 便签主体背景色 (低饱和莫兰迪色, 叠在磨砂玻璃上)
     var background: NSColor {
         switch self {
-        case .lemon: return NSColor(red: 1.00, green: 0.965, blue: 0.80, alpha: 1)
-        case .peach: return NSColor(red: 1.00, green: 0.90, blue: 0.88, alpha: 1)
-        case .mint:  return NSColor(red: 0.88, green: 0.97, blue: 0.89, alpha: 1)
-        case .sky:   return NSColor(red: 0.87, green: 0.94, blue: 1.00, alpha: 1)
-        case .lilac: return NSColor(red: 0.94, green: 0.90, blue: 0.99, alpha: 1)
+        case .lemon: return NSColor(red: 0.97, green: 0.95, blue: 0.88, alpha: 1)
+        case .peach: return NSColor(red: 0.98, green: 0.93, blue: 0.91, alpha: 1)
+        case .mint:  return NSColor(red: 0.92, green: 0.95, blue: 0.92, alpha: 1)
+        case .sky:   return NSColor(red: 0.92, green: 0.94, blue: 0.97, alpha: 1)
+        case .lilac: return NSColor(red: 0.95, green: 0.93, blue: 0.97, alpha: 1)
         }
     }
 
-    /// 顶栏加深一点的颜色
+    /// 顶栏轻微加深的颜色
     var bar: NSColor {
         switch self {
-        case .lemon: return NSColor(red: 0.98, green: 0.91, blue: 0.62, alpha: 1)
-        case .peach: return NSColor(red: 0.99, green: 0.80, blue: 0.76, alpha: 1)
-        case .mint:  return NSColor(red: 0.76, green: 0.92, blue: 0.79, alpha: 1)
-        case .sky:   return NSColor(red: 0.74, green: 0.87, blue: 0.99, alpha: 1)
-        case .lilac: return NSColor(red: 0.87, green: 0.79, blue: 0.97, alpha: 1)
+        case .lemon: return NSColor(red: 0.93, green: 0.89, blue: 0.76, alpha: 1)
+        case .peach: return NSColor(red: 0.95, green: 0.85, blue: 0.82, alpha: 1)
+        case .mint:  return NSColor(red: 0.84, green: 0.90, blue: 0.85, alpha: 1)
+        case .sky:   return NSColor(red: 0.83, green: 0.88, blue: 0.94, alpha: 1)
+        case .lilac: return NSColor(red: 0.88, green: 0.84, blue: 0.94, alpha: 1)
         }
     }
 
-    /// 正文文字颜色
+    /// 同色系强调色 (勾选框、引用条、选中态)
+    var accent: NSColor {
+        switch self {
+        case .lemon: return NSColor(red: 0.71, green: 0.58, blue: 0.22, alpha: 1)
+        case .peach: return NSColor(red: 0.80, green: 0.47, blue: 0.40, alpha: 1)
+        case .mint:  return NSColor(red: 0.36, green: 0.58, blue: 0.44, alpha: 1)
+        case .sky:   return NSColor(red: 0.34, green: 0.53, blue: 0.74, alpha: 1)
+        case .lilac: return NSColor(red: 0.55, green: 0.45, blue: 0.73, alpha: 1)
+        }
+    }
+
+    /// 正文文字颜色 (暖墨色, 深一点保证醒目)
     var text: NSColor {
-        NSColor(red: 0.22, green: 0.20, blue: 0.15, alpha: 1)
+        NSColor(red: 0.16, green: 0.15, blue: 0.13, alpha: 1)
     }
 }
 
