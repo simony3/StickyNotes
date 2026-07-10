@@ -70,7 +70,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         if !note.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let alert = NSAlert()
             alert.messageText = "删除这张便签?"
-            alert.informativeText = "便签内容将被永久删除。"
+            alert.informativeText = "便签会归档到菜单栏的「历史便签」里, 可以随时查看或恢复。"
             alert.addButton(withTitle: "删除")
             alert.addButton(withTitle: "取消")
             alert.alertStyle = .warning

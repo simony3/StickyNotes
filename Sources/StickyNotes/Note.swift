@@ -217,30 +217,47 @@ extension Note {
     }
 }
 
+// MARK: - 历史归档
+
+struct ArchivedNote: Codable, Identifiable {
+    let id: UUID
+    let text: String
+    let kind: NoteKind
+    let theme: NoteTheme
+    let deletedAt: Date
+}
+
 // MARK: - 存储
 
-final class NoteStore {
+final class NoteStore: ObservableObject {
     static let shared = NoteStore()
 
     private(set) var notes: [Note] = []
+    @Published private(set) var archived: [ArchivedNote] = []
     private var cancellables: [UUID: AnyCancellable] = [:]
     private var saveWorkItem: DispatchWorkItem?
 
-    private var fileURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    private var dir: URL {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("StickyNotes", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("notes.json")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
     }
+    private var fileURL: URL { dir.appendingPathComponent("notes.json") }
+    private var historyURL: URL { dir.appendingPathComponent("history.json") }
 
     func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([Note].self, from: data) else {
-            notes = []
-            return
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([Note].self, from: data) {
+            notes = decoded
+            notes.forEach(observe)
         }
-        notes = decoded
-        notes.forEach(observe)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let data = try? Data(contentsOf: historyURL),
+           let decoded = try? decoder.decode([ArchivedNote].self, from: data) {
+            archived = decoded
+        }
     }
 
     func add(_ note: Note) {
@@ -253,6 +270,38 @@ final class NoteStore {
         notes.removeAll { $0.id == note.id }
         cancellables[note.id] = nil
         scheduleSave()
+    }
+
+    /// 删除时归档: 有内容的便签移入历史
+    func archive(_ note: Note) {
+        guard !note.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        archived.insert(
+            ArchivedNote(id: UUID(), text: note.text, kind: note.kind,
+                         theme: note.theme, deletedAt: Date()),
+            at: 0)
+        saveHistory()
+    }
+
+    /// 从历史中取回 (返回归档内容, 由调用方重建便签)
+    func unarchive(_ id: UUID) -> ArchivedNote? {
+        guard let index = archived.firstIndex(where: { $0.id == id }) else { return nil }
+        let item = archived.remove(at: index)
+        saveHistory()
+        return item
+    }
+
+    func removeArchived(_ id: UUID) {
+        archived.removeAll { $0.id == id }
+        saveHistory()
+    }
+
+    private func saveHistory() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(archived) {
+            try? data.write(to: historyURL, options: .atomic)
+        }
     }
 
     private func observe(_ note: Note) {

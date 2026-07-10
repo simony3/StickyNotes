@@ -1,9 +1,11 @@
 import AppKit
+import SwiftUI
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var controllers: [UUID: NoteWindowController] = [:]
+    private var historyWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 单实例保护: 如果已经有一份在运行, 激活它并退出自己
@@ -58,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "新建文字便签", action: #selector(newTextNote), keyEquivalent: "n")
         menu.addItem(withTitle: "新建待办事项", action: #selector(newTodoNote), keyEquivalent: "t")
         menu.addItem(withTitle: "显示所有便签", action: #selector(showAll), keyEquivalent: "")
+        menu.addItem(withTitle: "历史便签", action: #selector(showHistory), keyEquivalent: "h")
         menu.addItem(.separator())
 
         let loginItem = NSMenuItem(
@@ -172,7 +175,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func delete(_ note: Note) {
         controllers[note.id]?.window?.orderOut(nil)
         controllers[note.id] = nil
+        NoteStore.shared.archive(note)   // 有内容的便签先归档进历史
         NoteStore.shared.remove(note)
+    }
+
+    // MARK: 历史便签
+
+    @objc private func showHistory() {
+        NSApp.activate(ignoringOtherApps: true)
+        if historyWindow == nil {
+            let view = HistoryView(store: NoteStore.shared) { [weak self] item in
+                self?.restore(item)
+            }
+            let win = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 540),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered, defer: false)
+            win.title = "历史便签"
+            win.contentView = NSHostingView(rootView: view)
+            win.isReleasedWhenClosed = false
+            win.center()
+            historyWindow = win
+        }
+        historyWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 把历史记录恢复成一张新便签
+    private func restore(_ item: ArchivedNote) {
+        guard let archived = NoteStore.shared.unarchive(item.id) else { return }
+        let cascade = CGFloat(controllers.count % 8) * 28
+        let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let note = Note(
+            text: archived.text, kind: archived.kind, theme: archived.theme,
+            frame: CGRect(x: screen.midX - 140 + cascade, y: screen.midY - 20 - cascade,
+                          width: 280, height: 280))
+        NoteStore.shared.add(note)
+        showWindow(note)
     }
 
     private func createWelcomeNote() {
