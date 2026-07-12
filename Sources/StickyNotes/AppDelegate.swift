@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NoteStore.shared.notes.forEach(showWindow)
         }
+
+        if CommandLine.arguments.contains("--show-history") {
+            showHistory()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
