@@ -59,7 +59,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "新建文字便签", action: #selector(newTextNote), keyEquivalent: "n")
         menu.addItem(withTitle: "新建待办事项", action: #selector(newTodoNote), keyEquivalent: "t")
-        menu.addItem(withTitle: "显示所有便签", action: #selector(showAll), keyEquivalent: "")
         menu.addItem(withTitle: "历史便签", action: #selector(showHistory), keyEquivalent: "h")
         menu.addItem(.separator())
 
