@@ -40,10 +40,54 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
                 note.mode = mode
                 self?.applyMode()
             },
-            onNewNote: onNewNote
+            onNewNote: onNewNote,
+            onToggleCollapse: { [weak self] in self?.toggleCollapse() }
         )
         window.contentView = NSHostingView(rootView: view)
+        if note.isCollapsed {
+            window.styleMask.remove(.resizable)
+            window.minSize = NSSize(width: 180, height: NoteWindowController.barHeight)
+        }
         applyMode()
+    }
+
+    static let barHeight: CGFloat = 30
+
+    /// 折叠成一行标题 / 展开恢复原尺寸
+    func toggleCollapse() {
+        guard let window else { return }
+        if note.isCollapsed {
+            note.isCollapsed = false
+            window.styleMask.insert(.resizable)
+            window.minSize = NSSize(width: 180, height: 120)
+            // 顶边保持不动, 往下展开
+            let target = CGRect(
+                x: window.frame.minX,
+                y: window.frame.maxY - note.expandedFrame.height,
+                width: note.expandedFrame.width,
+                height: note.expandedFrame.height)
+            window.setFrame(target, display: true, animate: true)
+            note.frame = target
+        } else {
+            note.expandedFrame = window.frame
+            note.isCollapsed = true
+            window.styleMask.remove(.resizable)
+            window.minSize = NSSize(width: 120, height: NoteWindowController.barHeight)
+            // 宽度完全跟随标题, 无上限, 保证标题一字不落完整显示
+            let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+            let titleWidth = (note.title as NSString)
+                .size(withAttributes: [.font: font]).width
+            let width = ceil(titleWidth) + 120
+            // 顶边保持不动, 往上收起
+            let target = CGRect(
+                x: window.frame.minX,
+                y: window.frame.maxY - NoteWindowController.barHeight,
+                width: width,
+                height: NoteWindowController.barHeight)
+            window.setFrame(target, display: true, animate: true)
+            note.frame = target
+        }
+        NoteStore.shared.scheduleSave()
     }
 
     required init?(coder: NSCoder) { fatalError() }

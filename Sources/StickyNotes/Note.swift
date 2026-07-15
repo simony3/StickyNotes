@@ -101,8 +101,10 @@ final class Note: ObservableObject, Identifiable, Codable {
     @Published var theme: NoteTheme
     @Published var mode: NoteMode
     @Published var isPreview: Bool   // true = 渲染 Markdown, false = 编辑原文
+    @Published var isCollapsed: Bool // true = 折叠成一行标题
     let kind: NoteKind
     var frame: CGRect
+    var expandedFrame: CGRect        // 折叠前的尺寸, 展开时恢复
 
     init(id: UUID = UUID(),
          text: String = "",
@@ -110,23 +112,63 @@ final class Note: ObservableObject, Identifiable, Codable {
          theme: NoteTheme = .lemon,
          mode: NoteMode = .floating,
          isPreview: Bool = false,
-         frame: CGRect = .zero) {
+         isCollapsed: Bool = false,
+         frame: CGRect = .zero,
+         expandedFrame: CGRect? = nil) {
         self.id = id
         self.text = text
         self.kind = kind
         self.theme = theme
         self.mode = mode
         self.isPreview = isPreview
+        self.isCollapsed = isCollapsed
         self.frame = frame
+        self.expandedFrame = expandedFrame ?? frame
+    }
+
+    /// 折叠时显示的标题: 取第一行非空内容, 去掉 Markdown 符号; 待办加进度
+    var title: String {
+        var first = ""
+        for line in text.components(separatedBy: "\n") {
+            var t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { continue }
+            for p in ["# ", "## ", "### ", "- [x] ", "- [X] ", "- [ ] ",
+                      "[x] ", "[X] ", "[ ] ", "- ", "* ", "> "] {
+                if t.hasPrefix(p) { t = String(t.dropFirst(p.count)); break }
+            }
+            if !t.isEmpty { first = t; break }
+        }
+        if kind == .todo {
+            let items = todoItems
+            if !items.isEmpty {
+                let done = items.filter(\.done).count
+                return "\(done)/\(items.count) · \(first)"
+            }
+        }
+        return first.isEmpty ? "空便签" : first
     }
 
     // Codable (手动实现, 因为 @Published 不能自动合成)
     enum CodingKeys: String, CodingKey {
-        case id, text, kind, theme, mode, isPreview, x, y, w, h
+        case id, text, kind, theme, mode, isPreview, isCollapsed, x, y, w, h, ex, ey, ew, eh
     }
 
     convenience init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let frame = CGRect(
+            x: try c.decodeIfPresent(Double.self, forKey: .x) ?? 0,
+            y: try c.decodeIfPresent(Double.self, forKey: .y) ?? 0,
+            width: try c.decodeIfPresent(Double.self, forKey: .w) ?? 280,
+            height: try c.decodeIfPresent(Double.self, forKey: .h) ?? 280
+        )
+        var expanded: CGRect? = nil
+        if let ew = try c.decodeIfPresent(Double.self, forKey: .ew),
+           let eh = try c.decodeIfPresent(Double.self, forKey: .eh) {
+            expanded = CGRect(
+                x: try c.decodeIfPresent(Double.self, forKey: .ex) ?? frame.origin.x,
+                y: try c.decodeIfPresent(Double.self, forKey: .ey) ?? frame.origin.y,
+                width: ew, height: eh)
+        }
         self.init(
             id: try c.decode(UUID.self, forKey: .id),
             text: try c.decode(String.self, forKey: .text),
@@ -134,12 +176,9 @@ final class Note: ObservableObject, Identifiable, Codable {
             theme: try c.decodeIfPresent(NoteTheme.self, forKey: .theme) ?? .lemon,
             mode: try c.decodeIfPresent(NoteMode.self, forKey: .mode) ?? .floating,
             isPreview: try c.decodeIfPresent(Bool.self, forKey: .isPreview) ?? false,
-            frame: CGRect(
-                x: try c.decodeIfPresent(Double.self, forKey: .x) ?? 0,
-                y: try c.decodeIfPresent(Double.self, forKey: .y) ?? 0,
-                width: try c.decodeIfPresent(Double.self, forKey: .w) ?? 280,
-                height: try c.decodeIfPresent(Double.self, forKey: .h) ?? 280
-            )
+            isCollapsed: try c.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false,
+            frame: frame,
+            expandedFrame: expanded
         )
     }
 
@@ -151,10 +190,15 @@ final class Note: ObservableObject, Identifiable, Codable {
         try c.encode(theme, forKey: .theme)
         try c.encode(mode, forKey: .mode)
         try c.encode(isPreview, forKey: .isPreview)
+        try c.encode(isCollapsed, forKey: .isCollapsed)
         try c.encode(frame.origin.x, forKey: .x)
         try c.encode(frame.origin.y, forKey: .y)
         try c.encode(frame.width, forKey: .w)
         try c.encode(frame.height, forKey: .h)
+        try c.encode(expandedFrame.origin.x, forKey: .ex)
+        try c.encode(expandedFrame.origin.y, forKey: .ey)
+        try c.encode(expandedFrame.width, forKey: .ew)
+        try c.encode(expandedFrame.height, forKey: .eh)
     }
 }
 
@@ -214,6 +258,21 @@ extension Note {
         guard items.indices.contains(index) else { return }
         items.remove(at: index)
         writeTodos(items)
+    }
+
+    /// 文字便签 Markdown 里的任务行: 按行号切换 "- [ ]" ↔ "- [x]"
+    func toggleTaskLine(_ lineIndex: Int) {
+        var lines = text.components(separatedBy: "\n")
+        guard lines.indices.contains(lineIndex) else { return }
+        let line = lines[lineIndex]
+        if let r = line.range(of: "- [ ] ") {
+            lines[lineIndex] = line.replacingCharacters(in: r, with: "- [x] ")
+        } else if let r = line.range(of: "- [x] ") ?? line.range(of: "- [X] ") {
+            lines[lineIndex] = line.replacingCharacters(in: r, with: "- [ ] ")
+        } else {
+            return
+        }
+        text = lines.joined(separator: "\n")
     }
 }
 

@@ -18,6 +18,7 @@ struct NoteView: View {
     var onClose: () -> Void
     var onModeChange: (NoteMode) -> Void
     var onNewNote: (NoteKind) -> Void
+    var onToggleCollapse: () -> Void
 
     @State private var hovering = false
 
@@ -27,7 +28,9 @@ struct NoteView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            content
+            if !note.isCollapsed {
+                content
+            }
         }
         .background {
             // 玻璃拟态: 磨砂玻璃透出桌面 + 半透明色彩罩保证文字可读
@@ -83,9 +86,19 @@ struct NoteView: View {
             .frame(width: 19)
             .help("新建便签")
 
+            if note.isCollapsed {
+                // 折叠态: 显示标题
+                Text(note.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ink.opacity(0.75))
+                    .lineLimit(1)
+                    .fixedSize()   // 强制完整显示, 永不省略成 "..."
+                    .padding(.leading, 2)
+            }
+
             Spacer()
 
-            if hovering {
+            if !note.isCollapsed && hovering {
                 // 颜色切换
                 ForEach(NoteTheme.allCases, id: \.self) { theme in
                     Button {
@@ -132,18 +145,31 @@ struct NoteView: View {
                 .help("窗口模式: \(note.mode.displayName)")
             }
 
-            // 编辑/预览切换
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { note.isPreview.toggle() }
-            } label: {
-                Image(systemName: note.isPreview ? "pencil" : "eye")
+            // 编辑/预览切换 (折叠时隐藏)
+            if !note.isCollapsed {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { note.isPreview.toggle() }
+                } label: {
+                    Image(systemName: note.isPreview ? "pencil" : "eye")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ink.opacity(hovering ? 0.55 : 0.22))
+                        .frame(width: 17, height: 17)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .help(note.isPreview ? "回到编辑" : "预览 (只读干净视图)")
+            }
+
+            // 折叠/展开
+            Button(action: onToggleCollapse) {
+                Image(systemName: note.isCollapsed
+                    ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(ink.opacity(hovering ? 0.55 : 0.22))
                     .frame(width: 17, height: 17)
-                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
-            .help(note.isPreview ? "回到编辑" : "预览 (只读干净视图)")
+            .help(note.isCollapsed ? "展开便签" : "折叠成一行标题")
         }
         .padding(.horizontal, 9)
         .frame(height: 30)
@@ -164,7 +190,8 @@ struct NoteView: View {
             TodoListView(note: note, readOnly: note.isPreview)
         } else if note.isPreview {
             ScrollView {
-                MarkdownText(source: note.text, theme: note.theme)
+                MarkdownText(source: note.text, theme: note.theme,
+                             onToggleTask: { note.toggleTaskLine($0) })
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
             }
@@ -291,20 +318,21 @@ struct TodoListView: View {
 struct MarkdownText: View {
     let source: String
     let theme: NoteTheme
+    var onToggleTask: ((Int) -> Void)? = nil   // 参数是行号
 
     private var ink: Color { Color(nsColor: theme.text) }
     private var accent: Color { Color(nsColor: theme.accent) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(source.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                renderLine(line)
+            ForEach(Array(source.components(separatedBy: "\n").enumerated()), id: \.offset) { index, line in
+                renderLine(line, at: index)
             }
         }
     }
 
     @ViewBuilder
-    private func renderLine(_ line: String) -> some View {
+    private func renderLine(_ line: String, at lineIndex: Int) -> some View {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             Text(" ").font(.system(size: 6))
@@ -321,10 +349,16 @@ struct MarkdownText: View {
                 .padding(.bottom, 2)
         } else if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
             HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "checkmark.square.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(accent.opacity(0.85))
-                    .padding(.top, 2)
+                Button {
+                    withAnimation(.spring(duration: 0.3)) { onToggleTask?(lineIndex) }
+                } label: {
+                    Image(systemName: "checkmark.square.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(accent.opacity(0.85))
+                        .padding(.top, 2)
+                }
+                .buttonStyle(.plain)
+                .help("取消完成")
                 inline(String(trimmed.dropFirst(6)))
                     .font(.system(size: 14))
                     .strikethrough(true, color: ink.opacity(0.45))
@@ -332,10 +366,16 @@ struct MarkdownText: View {
             }
         } else if trimmed.hasPrefix("- [ ] ") {
             HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "square")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ink.opacity(0.35))
-                    .padding(.top, 2)
+                Button {
+                    withAnimation(.spring(duration: 0.3)) { onToggleTask?(lineIndex) }
+                } label: {
+                    Image(systemName: "square")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ink.opacity(0.35))
+                        .padding(.top, 2)
+                }
+                .buttonStyle(.plain)
+                .help("标记完成")
                 inline(String(trimmed.dropFirst(6))).font(.system(size: 14))
             }
         } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
