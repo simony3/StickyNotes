@@ -11,6 +11,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
     let note: Note
     private let onDelete: (Note) -> Void
     private let onNewNote: (NoteKind) -> Void
+    private var mouseUpMonitor: Any?
 
     init(note: Note, onDelete: @escaping (Note) -> Void, onNewNote: @escaping (NoteKind) -> Void) {
         self.note = note
@@ -49,6 +50,18 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             window.minSize = NSSize(width: 180, height: NoteWindowController.barHeight)
         }
         applyMode()
+
+        // 拖动松手时把吸附中的折叠条平滑归位
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.settleSnap()
+            return event
+        }
+    }
+
+    deinit {
+        if let mouseUpMonitor {
+            NSEvent.removeMonitor(mouseUpMonitor)
+        }
     }
 
     static let barHeight: CGFloat = 30
@@ -58,6 +71,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         guard let window else { return }
         if note.isCollapsed {
             note.isCollapsed = false
+            note.snappedEdge = nil
             window.styleMask.insert(.resizable)
             window.minSize = NSSize(width: 180, height: 120)
             // 顶边保持不动, 往下展开
@@ -77,7 +91,8 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
             let titleWidth = (note.title as NSString)
                 .size(withAttributes: [.font: font]).width
-            let width = ceil(titleWidth) + 120
+            // 52 = 内边距+展开按钮 45 + 一点点呼吸感 (折叠态没有删除/新建按钮)
+            let width = ceil(titleWidth) + 52
             // 顶边保持不动, 往上收起
             let target = CGRect(
                 x: window.frame.minX,
@@ -123,12 +138,63 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         onDelete(note)
     }
 
-    // 拖动/缩放后记住位置
+    // 拖动/缩放后记住位置; 折叠条碰到屏幕左右边缘时吸附。
+    // 拖动中只更新形状+触感反馈, 不动窗口位置(否则和手上的拖拽打架会抖),
+    // 松开鼠标后再平滑动画归位贴边。
     func windowDidMove(_ notification: Notification) {
-        if let f = window?.frame {
-            note.frame = f
-            NoteStore.shared.scheduleSave()
+        guard let window else { return }
+
+        if note.isCollapsed, let screen = window.screen {
+            let sf = screen.visibleFrame
+            let f = window.frame
+            let threshold: CGFloat = 16
+
+            var edge: SnapEdge? = nil
+            if f.minX - sf.minX <= threshold {
+                edge = .left
+            } else if sf.maxX - f.maxX <= threshold {
+                edge = .right
+            }
+
+            if edge != note.snappedEdge {
+                note.snappedEdge = edge
+                if edge != nil {
+                    // 触感反馈: 触控板轻"哒"一下
+                    NSHapticFeedbackManager.defaultPerformer
+                        .perform(.alignment, performanceTime: .default)
+                }
+            }
+
+            // 只有非拖拽状态(程序移动/动画)才直接落位
+            let dragging = NSEvent.pressedMouseButtons & 1 == 1
+            if !dragging { settleSnap(animated: false) }
         }
+
+        note.frame = window.frame
+        NoteStore.shared.scheduleSave()
+    }
+
+    /// 松手后把吸附中的折叠条平滑归位到贴边位置
+    func settleSnap(animated: Bool = true) {
+        guard let window, note.isCollapsed, let edge = note.snappedEdge,
+              let screen = window.screen else { return }
+        let sf = screen.visibleFrame
+        let f = window.frame
+        let targetX = (edge == .left) ? sf.minX : sf.maxX - f.width
+        guard abs(f.minX - targetX) > 0.5 else { return }
+
+        let target = CGRect(x: targetX, y: f.minY, width: f.width, height: f.height)
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(target, display: true)
+            }
+        } else {
+            window.setFrame(target, display: true)
+        }
+        note.frame = target
+        NoteStore.shared.scheduleSave()
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {

@@ -93,6 +93,12 @@ enum NoteKind: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - 折叠条吸附边
+
+enum SnapEdge: String, Codable {
+    case left, right
+}
+
 // MARK: - 便签模型
 
 final class Note: ObservableObject, Identifiable, Codable {
@@ -102,6 +108,7 @@ final class Note: ObservableObject, Identifiable, Codable {
     @Published var mode: NoteMode
     @Published var isPreview: Bool   // true = 渲染 Markdown, false = 编辑原文
     @Published var isCollapsed: Bool // true = 折叠成一行标题
+    @Published var snappedEdge: SnapEdge?  // 折叠条吸附在屏幕哪条边
     let kind: NoteKind
     var frame: CGRect
     var expandedFrame: CGRect        // 折叠前的尺寸, 展开时恢复
@@ -113,6 +120,7 @@ final class Note: ObservableObject, Identifiable, Codable {
          mode: NoteMode = .floating,
          isPreview: Bool = false,
          isCollapsed: Bool = false,
+         snappedEdge: SnapEdge? = nil,
          frame: CGRect = .zero,
          expandedFrame: CGRect? = nil) {
         self.id = id
@@ -122,6 +130,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         self.mode = mode
         self.isPreview = isPreview
         self.isCollapsed = isCollapsed
+        self.snappedEdge = snappedEdge
         self.frame = frame
         self.expandedFrame = expandedFrame ?? frame
     }
@@ -150,7 +159,7 @@ final class Note: ObservableObject, Identifiable, Codable {
 
     // Codable (手动实现, 因为 @Published 不能自动合成)
     enum CodingKeys: String, CodingKey {
-        case id, text, kind, theme, mode, isPreview, isCollapsed, x, y, w, h, ex, ey, ew, eh
+        case id, text, kind, theme, mode, isPreview, isCollapsed, snap, x, y, w, h, ex, ey, ew, eh
     }
 
     convenience init(from decoder: Decoder) throws {
@@ -177,6 +186,7 @@ final class Note: ObservableObject, Identifiable, Codable {
             mode: try c.decodeIfPresent(NoteMode.self, forKey: .mode) ?? .floating,
             isPreview: try c.decodeIfPresent(Bool.self, forKey: .isPreview) ?? false,
             isCollapsed: try c.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false,
+            snappedEdge: try c.decodeIfPresent(SnapEdge.self, forKey: .snap),
             frame: frame,
             expandedFrame: expanded
         )
@@ -191,6 +201,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         try c.encode(mode, forKey: .mode)
         try c.encode(isPreview, forKey: .isPreview)
         try c.encode(isCollapsed, forKey: .isCollapsed)
+        try c.encodeIfPresent(snappedEdge, forKey: .snap)
         try c.encode(frame.origin.x, forKey: .x)
         try c.encode(frame.origin.y, forKey: .y)
         try c.encode(frame.width, forKey: .w)

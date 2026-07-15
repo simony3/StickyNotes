@@ -25,6 +25,22 @@ struct NoteView: View {
     private var accent: Color { Color(nsColor: note.theme.accent) }
     private var ink: Color { Color(nsColor: note.theme.text) }
 
+    /// 吸附屏幕边缘时, 贴边的一侧变直角 (被屏幕"切平"的效果)
+    private var cornerRadii: RectangleCornerRadii {
+        let r: CGFloat = 14
+        guard note.isCollapsed else {
+            return .init(topLeading: r, bottomLeading: r, bottomTrailing: r, topTrailing: r)
+        }
+        switch note.snappedEdge {
+        case .left:
+            return .init(topLeading: 0, bottomLeading: 0, bottomTrailing: r, topTrailing: r)
+        case .right:
+            return .init(topLeading: r, bottomLeading: r, bottomTrailing: 0, topTrailing: 0)
+        case nil:
+            return .init(topLeading: r, bottomLeading: r, bottomTrailing: r, topTrailing: r)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             topBar
@@ -39,10 +55,10 @@ struct NoteView: View {
                 Color(nsColor: note.theme.background).opacity(0.82)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(UnevenRoundedRectangle(cornerRadii: cornerRadii, style: .continuous))
         .overlay {
             // 玻璃边缘: 上亮下暗的渐变细线
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            UnevenRoundedRectangle(cornerRadii: cornerRadii, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
                         colors: [.white.opacity(0.55), .white.opacity(0.08),
@@ -50,6 +66,7 @@ struct NoteView: View {
                         startPoint: .top, endPoint: .bottom),
                     lineWidth: 1)
         }
+        .animation(.spring(duration: 0.25), value: note.snappedEdge)
         .onHover { h in
             withAnimation(.easeOut(duration: 0.18)) { hovering = h }
         }
@@ -59,6 +76,7 @@ struct NoteView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
+            if !note.isCollapsed {
             // 关闭(删除)按钮
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -85,9 +103,10 @@ struct NoteView: View {
             .menuIndicator(.hidden)
             .frame(width: 19)
             .help("新建便签")
+            }
 
             if note.isCollapsed {
-                // 折叠态: 显示标题
+                // 折叠态: 只显示标题 (删除/新建按钮隐藏, 展开后恢复)
                 Text(note.title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ink.opacity(0.75))
