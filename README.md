@@ -73,6 +73,26 @@ open /Applications/StickyNotes.app
 ---
 ```
 
+## AI / 命令行集成
+
+app 注册了 `stickynotes://` URL Scheme，任何程序（终端、Claude、Codex 等 AI 工具）都能直接创建便签：
+
+```bash
+# 原始 URL 方式
+open "stickynotes://add?kind=todo&theme=mint&text=%5B%20%5D%20%E4%BB%BB%E5%8A%A11"
+
+# 推荐: 用 scripts/stickynote 命令行工具 (装到 PATH 里)
+stickynote "随手记一条"
+stickynote -k todo "[ ] 复习线性代数
+[ ] 做完实验报告"
+stickynote -t sky -m desktop -p "# 本周计划
+- [ ] 周三前交作业"
+```
+
+参数：`kind=text|todo`、`theme=lemon|peach|mint|sky|lilac`、`mode=floating|normal|desktop`、`preview=1`（预览模式）、`collapsed=1`（折叠成标题条）。
+
+让 AI 助手读一遍这一节，它就能替你把学习计划直接变成屏幕上的便签。
+
 ## 数据存储
 
 便签内容保存在 `~/Library/Application Support/StickyNotes/notes.json`，纯 JSON 明文，方便备份和迁移。

@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 在启动台/访达里再次点开 app 时:
     /// 没有便签 → 创建一张新的; 已有便签 → 全部带到前面
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // 通过 URL 创建便签时 open 也会触发 reopen, 跳过避免弹类型选择框
+        if Date().timeIntervalSince(lastURLHandled) < 2 { return true }
         if controllers.isEmpty {
             promptNewNote()
         } else {
@@ -98,7 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func createNote(kind: NoteKind) {
+    @discardableResult
+    private func createNote(kind: NoteKind, text: String = "", theme: NoteTheme? = nil,
+                            mode: NoteMode = .floating, preview: Bool = false,
+                            collapsed: Bool = false) -> Note {
         let cascade = CGFloat(controllers.count % 8) * 28
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = CGRect(
@@ -106,14 +111,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             y: screen.midY - 20 - cascade,
             width: 280, height: 280)
 
-        // 新便签沿用最近一张的颜色顺延, 避免全是黄色
+        // 未指定颜色时顺延取色, 避免全是黄色
         let usedThemes = NoteStore.shared.notes.map(\.theme)
-        let nextTheme = NoteTheme.allCases.first { !usedThemes.contains($0) }
+        let nextTheme = theme
+            ?? NoteTheme.allCases.first { !usedThemes.contains($0) }
             ?? NoteTheme.allCases[NoteStore.shared.notes.count % NoteTheme.allCases.count]
 
-        let note = Note(kind: kind, theme: nextTheme, frame: frame)
+        let note = Note(text: text, kind: kind, theme: nextTheme,
+                        mode: mode, isPreview: preview, frame: frame)
         NoteStore.shared.add(note)
         showWindow(note)
+        if collapsed {
+            controllers[note.id]?.toggleCollapse()
+        }
+        return note
+    }
+
+    // MARK: URL Scheme (stickynotes://add?...)
+    // 供命令行 / AI 工具创建便签:
+    //   open "stickynotes://add?kind=todo&theme=mint&text=%E5%86%85%E5%AE%B9"
+    // 参数: kind=text|todo, theme=lemon|peach|mint|sky|lilac,
+    //       mode=floating|normal|desktop, preview=1, collapsed=1, text=百分号编码内容
+
+    private var lastURLHandled = Date.distantPast
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { handleURL(url) }
+    }
+
+    private func handleURL(_ url: URL) {
+        guard url.scheme == "stickynotes",
+              url.host == "add",
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        lastURLHandled = Date()
+
+        var q: [String: String] = [:]
+        comps.queryItems?.forEach { q[$0.name] = $0.value }
+
+        createNote(
+            kind: NoteKind(rawValue: q["kind"] ?? "") ?? .text,
+            text: q["text"] ?? "",
+            theme: NoteTheme(rawValue: q["theme"] ?? ""),
+            mode: NoteMode(rawValue: q["mode"] ?? "") ?? .floating,
+            preview: q["preview"] == "1",
+            collapsed: q["collapsed"] == "1")
     }
 
     @objc private func showAll() {

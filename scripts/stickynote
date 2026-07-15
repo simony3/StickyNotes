@@ -1,0 +1,41 @@
+#!/bin/bash
+# stickynote - 命令行创建便签 (供人类和 AI 使用)
+#
+# 用法:
+#   stickynote "便签内容"                          # 文字便签
+#   stickynote -k todo "[ ] 任务1
+# [ ] 任务2"                                       # 待办便签 (每行一条, [x] 表示已完成)
+#   stickynote -t mint -m desktop -p "# 标题..."   # 指定颜色/贴桌面/预览模式
+#
+# 选项:
+#   -k text|todo                       便签类型 (默认 text)
+#   -t lemon|peach|mint|sky|lilac      颜色主题 (默认自动选)
+#   -m floating|normal|desktop         窗口模式 (默认 floating 置顶)
+#   -p                                 预览模式打开 (渲染 Markdown)
+#   -c                                 折叠成一行标题
+set -e
+
+KIND=text; THEME=""; MODE=""; PREVIEW=0; COLLAPSED=0
+while getopts "k:t:m:pch" opt; do
+  case $opt in
+    k) KIND=$OPTARG ;;
+    t) THEME=$OPTARG ;;
+    m) MODE=$OPTARG ;;
+    p) PREVIEW=1 ;;
+    c) COLLAPSED=1 ;;
+    h) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) exit 1 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+TEXT="${1:?用法: stickynote [-k text|todo] [-t 颜色] [-m 模式] [-p] [-c] \"内容\"}"
+ENC=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$TEXT")
+
+URL="stickynotes://add?kind=${KIND}&text=${ENC}"
+[ -n "$THEME" ] && URL="${URL}&theme=${THEME}"
+[ -n "$MODE" ] && URL="${URL}&mode=${MODE}"
+[ "$PREVIEW" = 1 ] && URL="${URL}&preview=1"
+[ "$COLLAPSED" = 1 ] && URL="${URL}&collapsed=1"
+
+open "$URL"
