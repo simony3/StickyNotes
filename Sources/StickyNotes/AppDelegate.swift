@@ -141,20 +141,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleURL(_ url: URL) {
         guard url.scheme == "stickynotes",
-              url.host == "add",
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         lastURLHandled = Date()
 
         var q: [String: String] = [:]
         comps.queryItems?.forEach { q[$0.name] = $0.value }
 
-        createNote(
-            kind: NoteKind(rawValue: q["kind"] ?? "") ?? .text,
-            text: q["text"] ?? "",
-            theme: NoteTheme(rawValue: q["theme"] ?? ""),
-            mode: NoteMode(rawValue: q["mode"] ?? "") ?? .floating,
-            preview: q["preview"] == "1",
-            collapsed: q["collapsed"] == "1")
+        switch url.host {
+        case "add":
+            createNote(
+                kind: NoteKind(rawValue: q["kind"] ?? "") ?? .text,
+                text: q["text"] ?? "",
+                theme: NoteTheme(rawValue: q["theme"] ?? ""),
+                mode: NoteMode(rawValue: q["mode"] ?? "") ?? .floating,
+                preview: q["preview"] == "1",
+                collapsed: q["collapsed"] == "1")
+
+        case "update":
+            // stickynotes://update?id=<UUID>&text=...&theme=...
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr),
+                  let note = NoteStore.shared.notes.first(where: { $0.id == id }) else { return }
+            if let text = q["text"] { note.text = text }
+            if let theme = NoteTheme(rawValue: q["theme"] ?? "") { note.theme = theme }
+            // 折叠条宽度跟随新标题重算
+            if note.isCollapsed, let controller = controllers[id] {
+                controller.toggleCollapse()
+                controller.toggleCollapse()
+            }
+
+        default:
+            break
+        }
     }
 
     @objc private func showAll() {
