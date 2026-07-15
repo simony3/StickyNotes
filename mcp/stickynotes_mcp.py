@@ -187,6 +187,11 @@ def overwrite_data(args):
     return "已重写 {} 并重启 app (原文件备份为 .bak)".format("、".join(writes))
 
 
+def _encode(params):
+    # 必须用 %20 编码空格; 默认的 + 号 app 端不会还原成空格
+    return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+
+
 def create_note(args):
     params = {"kind": args.get("kind", "text"), "text": args.get("text", "")}
     if args.get("theme"):
@@ -197,7 +202,7 @@ def create_note(args):
         params["preview"] = "1"
     if args.get("collapsed"):
         params["collapsed"] = "1"
-    url = "stickynotes://add?" + urllib.parse.urlencode(params)
+    url = "stickynotes://add?" + _encode(params)
     subprocess.run(["open", url], check=True, timeout=10)
     return "已创建便签: kind={}, {} 字".format(params["kind"], len(params["text"]))
 
@@ -206,7 +211,7 @@ def update_note(args):
     params = {"id": args.get("id", ""), "text": args.get("text", "")}
     if args.get("theme"):
         params["theme"] = args["theme"]
-    url = "stickynotes://update?" + urllib.parse.urlencode(params)
+    url = "stickynotes://update?" + _encode(params)
     subprocess.run(["open", url], check=True, timeout=10)
     return "已更新便签 {}".format(params["id"])
 
