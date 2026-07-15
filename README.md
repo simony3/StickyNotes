@@ -20,6 +20,12 @@ A lightweight, beautiful sticky notes app for macOS. Built with native Swift + S
 <b>🕰 历史便签</b> —— 删除的便签按日期归档, 随时回顾每天做了什么, 可一键恢复<br>
 <img src="docs/screenshots/history.png" width="480" alt="历史便签: 按日期分组回顾">
 
+<br><b>📏 折叠便签 + 屏幕边缘吸附</b> —— 一键折叠成一行标题条 (待办自动带完成进度);
+拖到屏幕左/右边缘自动吸附, 贴边端被"切平", 松手平滑归位并伴随触控板触感反馈<br>
+<img src="docs/screenshots/capsule-todo-snapped.png" width="190" alt="吸附左边缘的待办折叠条, 带 2/4 进度, 左端切平"><br>
+<img src="docs/screenshots/capsule-text-snapped.png" width="112" alt="吸附左边缘的文字便签折叠条"><br>
+<img src="docs/screenshots/capsule-free.png" width="135" alt="未吸附的折叠条, 两端圆角胶囊形">
+
 ## 功能
 
 - **两种便签类型**
@@ -30,6 +36,10 @@ A lightweight, beautiful sticky notes app for macOS. Built with native Swift + S
   - 🪟 普通窗口 —— 和普通应用一样
   - 🖥 贴在桌面 —— 沉到桌面层，像小组件一样贴着壁纸，不遮挡任何操作
 - **历史便签**：删除的便签自动按日期归档，按天分组回顾过去做了什么，可一键恢复
+- **折叠便签**：一键收起成一行标题条，标题取自第一行内容且永不省略，待办便签带完成进度（如 `2/4`），折叠状态重启后保持
+- **边缘吸附**：折叠条拖近屏幕左/右边缘自动吸平，贴边端圆角变直角（被屏幕"切割"的效果），带触控板触感反馈，松手平滑归位
+- **预览里直接打勾**：文字便签预览模式下，`- [ ]` 渲染出的方框可直接点击勾选/取消，原文自动同步
+- **AI 集成（MCP）**：内置 MCP 服务器，Codex / Claude 等 AI 助手可直接创建、修改、查阅便签（见下文）
 - **五种柔和配色**：莫兰迪色系的柠檬黄 / 蜜桃粉 / 薄荷绿 / 天空蓝 / 丁香紫
 - **玻璃拟态设计**：磨砂半透明背景、渐变玻璃边框、衬线体标题
 - **自动保存**：停止输入 1 秒后自动写盘，位置、大小、颜色、模式全部记住
@@ -58,6 +68,9 @@ open /Applications/StickyNotes.app
 | 调整大小 | 拖拽便签边缘 |
 | 换颜色 / 切换窗口模式 | 鼠标悬停在便签顶栏 |
 | 编辑 / 预览 | 顶栏 ✏️ / 👁 按钮 |
+| 折叠 / 展开 | 顶栏最右侧折叠按钮 |
+| 贴边吸附 | 拖动折叠条靠近屏幕左/右边缘（16pt 内自动吸附，拖离恢复） |
+| 待办打勾 | 待办便签点方框；文字便签预览模式下点 `- [ ]` 方框同样有效 |
 | 删除便签 | 顶栏左上角 ✕（会归档进历史，可找回） |
 | 查看/恢复历史便签 | 菜单栏 →"历史便签" |
 | 召唤所有便签 | 点 app 图标 |
@@ -73,25 +86,35 @@ open /Applications/StickyNotes.app
 ---
 ```
 
-## AI / 命令行集成
+## AI 集成（MCP）
 
-app 注册了 `stickynotes://` URL Scheme，任何程序（终端、Claude、Codex 等 AI 工具）都能直接创建便签：
+项目内置一个零依赖的 [MCP](https://modelcontextprotocol.io/) 服务器（`mcp/stickynotes_mcp.py`，系统自带 Python 即可运行），把便签能力暴露给任何支持 MCP 的 AI 客户端（Codex、Claude Desktop、Claude Code 等）。配置好之后，直接对 AI 说"帮我把明天的学习计划贴成便签"，便签就会出现在屏幕上。
 
-```bash
-# 原始 URL 方式
-open "stickynotes://add?kind=todo&theme=mint&text=%5B%20%5D%20%E4%BB%BB%E5%8A%A11"
+**提供的工具：**
 
-# 推荐: 用 scripts/stickynote 命令行工具 (装到 PATH 里)
-stickynote "随手记一条"
-stickynote -k todo "[ ] 复习线性代数
-[ ] 做完实验报告"
-stickynote -t sky -m desktop -p "# 本周计划
-- [ ] 周三前交作业"
+| 工具 | 说明 |
+|---|---|
+| `create_note` | 创建便签（类型 / 颜色 / 窗口模式 / 折叠等全参数） |
+| `update_note` | 修改已有便签的内容或颜色（按 id） |
+| `list_notes` | 读取当前所有便签 |
+| `list_history` | 读取历史归档 |
+| `overwrite_data` | 万能工具：整体重写便签数据（自动备份 + 重启 app），删除、改模式、恢复历史等一切操作都由它兜底 |
+
+**配置方法（Codex 桌面版）**——在 `~/.codex/config.toml` 中追加：
+
+```toml
+[mcp_servers.stickynotes]
+command = "python3"
+args = ["/你的路径/StickyNotes/mcp/stickynotes_mcp.py"]
 ```
 
-参数：`kind=text|todo`、`theme=lemon|peach|mint|sky|lilac`、`mode=floating|normal|desktop`、`preview=1`（预览模式）、`collapsed=1`（折叠成标题条）。
+**配置方法（Claude Code）**：
 
-让 AI 助手读一遍这一节，它就能替你把学习计划直接变成屏幕上的便签。
+```bash
+claude mcp add stickynotes -- python3 /你的路径/StickyNotes/mcp/stickynotes_mcp.py
+```
+
+重启客户端后 AI 即可看到上述工具。
 
 ## 数据存储
 
@@ -101,12 +124,14 @@ stickynote -t sky -m desktop -p "# 本周计划
 
 ```
 Sources/StickyNotes/
-├── main.swift          # 入口, NSApplication 启动
-├── AppDelegate.swift   # 菜单栏、便签窗口管理、类型选择
+├── main.swift          # 入口, NSApplication 启动, 隐藏编辑菜单(快捷键支持)
+├── AppDelegate.swift   # 菜单栏、便签窗口管理、类型选择、URL 接口
 ├── Note.swift          # 数据模型 + JSON 持久化 + 待办条目读写 + 历史归档
-├── NoteView.swift      # SwiftUI 界面: 便签视图、待办清单、Markdown 渲染
+├── NoteView.swift      # SwiftUI 界面: 便签视图、待办清单、Markdown 渲染、折叠条
 ├── HistoryView.swift   # 历史便签窗口: 按日期分组、恢复、彻底删除
-└── NoteWindow.swift    # 无边框窗口、三种层级模式
+└── NoteWindow.swift    # 无边框窗口、三种层级模式、折叠与边缘吸附
+mcp/
+└── stickynotes_mcp.py  # MCP 服务器: AI 客户端控制便签的入口
 ```
 
 ## License
