@@ -135,8 +135,17 @@ final class Note: ObservableObject, Identifiable, Codable {
         self.expandedFrame = expandedFrame ?? frame
     }
 
-    /// 折叠时显示的标题: 取第一行非空内容, 去掉 Markdown 符号; 待办加进度
+    /// 折叠时显示的标题: 文字便签取第一行非空内容, 去掉 Markdown 符号;
+    /// 待办便签取第一个未完成任务并加进度, 全部完成时显示"全部完成"
     var title: String {
+        if kind == .todo {
+            let items = todoItems
+            if !items.isEmpty {
+                let done = items.filter(\.done).count
+                let current = items.first { !$0.done }?.text ?? "全部完成"
+                return "\(done)/\(items.count) · \(current)"
+            }
+        }
         var first = ""
         for line in text.components(separatedBy: "\n") {
             var t = line.trimmingCharacters(in: .whitespaces)
@@ -146,13 +155,6 @@ final class Note: ObservableObject, Identifiable, Codable {
                 if t.hasPrefix(p) { t = String(t.dropFirst(p.count)); break }
             }
             if !t.isEmpty { first = t; break }
-        }
-        if kind == .todo {
-            let items = todoItems
-            if !items.isEmpty {
-                let done = items.filter(\.done).count
-                return "\(done)/\(items.count) · \(first)"
-            }
         }
         return first.isEmpty ? "空便签" : first
     }
