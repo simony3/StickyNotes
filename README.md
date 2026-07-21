@@ -1,8 +1,8 @@
 # 便签 StickyNotes 📝
 
-一个轻量、好看的 macOS 桌面便签应用。原生 Swift + SwiftUI 编写，无任何第三方依赖，编译产物只有几百 KB。
+**中文** | [English](README.en.md)
 
-A lightweight, beautiful sticky notes app for macOS. Built with native Swift + SwiftUI, zero dependencies.
+一个轻量、好看的 macOS 桌面便签应用。原生 Swift + SwiftUI 编写，无任何第三方依赖，编译产物只有几百 KB。
 
 ## 截图
 
