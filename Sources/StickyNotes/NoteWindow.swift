@@ -47,7 +47,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: view)
         if note.isCollapsed {
             window.styleMask.remove(.resizable)
-            window.minSize = NSSize(width: 180, height: NoteWindowController.barHeight)
+            window.minSize = NSSize(width: 120, height: NoteWindowController.barHeight)
         }
         applyMode()
 
@@ -87,21 +87,29 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             note.isCollapsed = true
             window.styleMask.remove(.resizable)
             window.minSize = NSSize(width: 120, height: NoteWindowController.barHeight)
-            // 宽度完全跟随标题, 无上限, 保证标题一字不落完整显示
-            let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-            let titleWidth = (note.title as NSString)
-                .size(withAttributes: [.font: font]).width
-            // 52 = 内边距+展开按钮 45 + 一点点呼吸感 (折叠态没有删除/新建按钮)
-            let width = ceil(titleWidth) + 52
-            // 顶边保持不动, 往上收起
-            let target = CGRect(
-                x: window.frame.minX,
-                y: window.frame.maxY - NoteWindowController.barHeight,
-                width: width,
-                height: NoteWindowController.barHeight)
-            window.setFrame(target, display: true, animate: true)
-            note.frame = target
+            refreshCollapsedWidth()
         }
+        NoteStore.shared.scheduleSave()
+    }
+
+    /// 内容被 MCP 等外部入口更新后，只重算折叠条宽度，不破坏折叠和吸附状态。
+    func refreshCollapsedWidth(animated: Bool = true) {
+        guard let window, note.isCollapsed else { return }
+        // 宽度完全跟随标题，无上限，保证标题完整显示。
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let titleWidth = (note.title as NSString)
+            .size(withAttributes: [.font: font]).width
+        // 52 = 内边距 + 展开按钮 + 呼吸感。
+        let width = max(120, ceil(titleWidth) + 52)
+        // 右吸附时保持右边不动，其他情况保持左边不动。
+        let x = note.snappedEdge == .right ? window.frame.maxX - width : window.frame.minX
+        let target = CGRect(
+            x: x,
+            y: window.frame.maxY - NoteWindowController.barHeight,
+            width: width,
+            height: NoteWindowController.barHeight)
+        window.setFrame(target, display: true, animate: animated)
+        note.frame = target
         NoteStore.shared.scheduleSave()
     }
 

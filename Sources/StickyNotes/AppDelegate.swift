@@ -128,10 +128,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: URL Scheme (stickynotes://add?...)
-    // 供命令行 / AI 工具创建便签:
+    // 供命令行 / AI 工具以细粒度命令操作便签。
+    // 数据始终由正在运行的 App 通过 NoteStore 修改和保存，
+    // 避免外部工具直接重写 notes.json 造成竞争或数据丢失。
+    //
+    // 创建:
     //   open "stickynotes://add?kind=todo&theme=mint&text=%E5%86%85%E5%AE%B9"
     // 参数: kind=text|todo, theme=lemon|peach|mint|sky|lilac,
     //       mode=floating|normal|desktop, preview=1, collapsed=1, text=百分号编码内容
+    // 更新: stickynotes://update?id=<UUID>&text=...&theme=...&mode=...&preview=0|1&collapsed=0|1
+    // 删除: stickynotes://delete?id=<UUID>
+    // 恢复: stickynotes://restore?id=<历史记录 UUID>
+    // 删除历史: stickynotes://history-delete?id=<历史记录 UUID>
+    // 移动/缩放: stickynotes://frame?id=<UUID>&x=...&y=...&w=...&h=...
 
     private var lastURLHandled = Date.distantPast
 
@@ -158,20 +167,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 collapsed: q["collapsed"] == "1")
 
         case "update":
-            // stickynotes://update?id=<UUID>&text=...&theme=...
             guard let idStr = q["id"], let id = UUID(uuidString: idStr),
                   let note = NoteStore.shared.notes.first(where: { $0.id == id }) else { return }
             if let text = q["text"] { note.text = text }
             if let theme = NoteTheme(rawValue: q["theme"] ?? "") { note.theme = theme }
-            // 折叠条宽度跟随新标题重算
-            if note.isCollapsed, let controller = controllers[id] {
-                controller.toggleCollapse()
-                controller.toggleCollapse()
+            if let mode = NoteMode(rawValue: q["mode"] ?? "") {
+                note.mode = mode
+                controllers[id]?.applyMode()
             }
+            if note.kind == .text, let preview = queryBool(q["preview"]) {
+                note.isPreview = preview
+            }
+            if let collapsed = queryBool(q["collapsed"]), collapsed != note.isCollapsed {
+                controllers[id]?.toggleCollapse()
+            } else if note.isCollapsed, q["text"] != nil {
+                // 折叠条宽度跟随新标题重算，不需要先展开再折叠。
+                controllers[id]?.refreshCollapsedWidth()
+            }
+
+        case "delete":
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr),
+                  let note = NoteStore.shared.notes.first(where: { $0.id == id }) else { return }
+            delete(note)
+
+        case "restore":
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr),
+                  let item = NoteStore.shared.archived.first(where: { $0.id == id }) else { return }
+            restore(item)
+
+        case "history-delete":
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr) else { return }
+            NoteStore.shared.removeArchived(id)
+
+        case "frame":
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr),
+                  let note = NoteStore.shared.notes.first(where: { $0.id == id }),
+                  let controller = controllers[id], let window = controller.window else { return }
+            var frame = window.frame
+            if let value = queryDouble(q["x"]) { frame.origin.x = value }
+            if let value = queryDouble(q["y"]) { frame.origin.y = value }
+            if let value = queryDouble(q["w"]) { frame.size.width = max(120, value) }
+            if let value = queryDouble(q["h"]) {
+                frame.size.height = note.isCollapsed ? NoteWindowController.barHeight : max(120, value)
+            }
+            window.setFrame(frame, display: true, animate: true)
+            note.frame = frame
+            if !note.isCollapsed { note.expandedFrame = frame }
+            NoteStore.shared.scheduleSave()
+
+        case "show-all":
+            showAll()
+
+        case "show-history":
+            showHistory()
 
         default:
             break
         }
+    }
+
+    private func queryBool(_ value: String?) -> Bool? {
+        switch value?.lowercased() {
+        case "1", "true", "yes":  return true
+        case "0", "false", "no": return false
+        default:                    return nil
+        }
+    }
+
+    private func queryDouble(_ value: String?) -> CGFloat? {
+        guard let value, let number = Double(value), number.isFinite else { return nil }
+        return CGFloat(number)
     }
 
     @objc private func showAll() {

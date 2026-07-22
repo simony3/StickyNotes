@@ -39,7 +39,7 @@ drag it near the left/right screen edge to snap flush, with the edge-side corner
 - **Collapsed notes**: collapse a note into a single title bar — the title comes from the first line and is never truncated; todo notes show completion progress (e.g. `2/4`); collapsed state persists across restarts
 - **Edge snapping**: drag a collapsed bar near the left/right screen edge to snap flush — the edge-side corners turn square (as if "cut off" by the screen), with trackpad haptic feedback; release to settle smoothly
 - **Checkable preview**: in text-note preview mode, the checkboxes rendered from `- [ ]` are directly clickable, and the source text stays in sync
-- **AI integration (MCP)**: built-in MCP server so AI assistants like Codex / Claude can create, modify, and read notes directly (see below)
+- **AI integration (MCP)**: built-in MCP server so AI assistants like Codex / Claude can create, edit, delete, move, collapse, and restore notes directly (see below)
 - **Five soft colors**: Morandi-style lemon yellow / peach pink / mint green / sky blue / lilac purple
 - **Glassmorphism design**: frosted translucent background, gradient glass border, serif headings
 - **Auto save**: writes to disk 1 second after you stop typing; position, size, color, and mode are all remembered
@@ -95,10 +95,15 @@ The project ships a zero-dependency [MCP](https://modelcontextprotocol.io/) serv
 | Tool | Description |
 |---|---|
 | `create_note` | Create a note (full parameters: type / color / window mode / collapsed, etc.) |
-| `update_note` | Modify an existing note's content or color (by id) |
-| `list_notes` | Read all current notes |
-| `list_history` | Read the history archive |
-| `overwrite_data` | Catch-all tool: rewrite the entire note data (auto backup + app restart); deletion, mode changes, history restore, and everything else fall back to it |
+| `update_note` | Change content, color, window mode, preview, or collapsed state by id |
+| `delete_note` | Delete a note (non-empty content is archived automatically) |
+| `move_resize_note` | Move or resize a note window |
+| `list_notes` / `list_history` | Read active notes and history, including ids needed by other tools |
+| `restore_note` | Restore an archived item as a note |
+| `delete_history_item` | Permanently delete one history item |
+| `show_all_notes` / `show_history` | Bring notes forward or open the history window |
+
+Everyday changes are sent to the running app as granular commands, so the MCP server neither rewrites the JSON database nor restarts the app. The bulk migration/recovery tools `admin_export_data` and `admin_overwrite_data` are hidden by default. Set `STICKYNOTES_ENABLE_ADMIN_TOOLS=1` for the MCP process to expose them; an overwrite also requires an exact data revision and explicit confirmation.
 
 **Setup (Codex desktop)** — append to `~/.codex/config.toml`:
 
