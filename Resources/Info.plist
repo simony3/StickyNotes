@@ -10,6 +10,12 @@
     <string>StickyNotes</string>
     <key>CFBundleDisplayName</key>
     <string>便签</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh-Hans</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
