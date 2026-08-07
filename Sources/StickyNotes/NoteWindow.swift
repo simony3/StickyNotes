@@ -5,6 +5,27 @@ import SwiftUI
 final class NoteWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // 待办和预览没有 NSTextView 接管按键, 荧光笔的开关键在窗口这一层兜底。
+    // 文字便签编辑态由 HighlighterTextView 先处理, 轮不到这里。
+    var onToggleHighlighter: (() -> Void)?
+    /// 返回 true 表示这次 Esc 用来退出荧光笔了; 否则照常往下传,
+    /// 免得吞掉待办输入框之类地方原本的 Esc。
+    var onEscape: (() -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "h" {
+            onToggleHighlighter?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, onEscape?() == true { return }
+        super.keyDown(with: event)
+    }
 }
 
 final class NoteWindowController: NSWindowController, NSWindowDelegate {
@@ -33,6 +54,15 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
 
         super.init(window: window)
         window.delegate = self
+        window.onToggleHighlighter = { [weak note] in
+            guard let note, !note.isCollapsed else { return }
+            note.highlighterMode.toggle()
+        }
+        window.onEscape = { [weak note] in
+            guard let note, note.highlighterMode else { return false }
+            note.highlighterMode = false
+            return true
+        }
 
         let view = NoteView(
             note: note,

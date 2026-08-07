@@ -169,7 +169,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "update":
             guard let idStr = q["id"], let id = UUID(uuidString: idStr),
                   let note = NoteStore.shared.notes.first(where: { $0.id == id }) else { return }
-            if let text = q["text"] { note.text = text }
+            if let text = q["text"] {
+                note.text = text
+                // 外部入口是整段替换，旧文字范围已不再可靠。
+                note.highlights = []
+            }
             if let theme = NoteTheme(rawValue: q["theme"] ?? "") { note.theme = theme }
             if let mode = NoteMode(rawValue: q["mode"] ?? "") {
                 note.mode = mode
@@ -333,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let note = Note(
             text: archived.text, kind: archived.kind, theme: archived.theme,
+            highlights: archived.highlights,
             frame: CGRect(x: screen.midX - 140 + cascade, y: screen.midY - 20 - cascade,
                           width: 280, height: 280))
         NoteStore.shared.add(note)

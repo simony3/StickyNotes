@@ -49,6 +49,18 @@ enum NoteTheme: String, Codable, CaseIterable {
         }
     }
 
+    /// 针对每种便签底色挑选的对比荧光色。
+    /// 高亮只保存文字范围，切换主题时会自动改用这里的新颜色。
+    var highlighter: NSColor {
+        switch self {
+        case .lemon: return NSColor(red: 1.00, green: 0.38, blue: 0.30, alpha: 0.44) // 珊瑚红
+        case .peach: return NSColor(red: 1.00, green: 0.72, blue: 0.08, alpha: 0.56) // 琥珀黄
+        case .mint:  return NSColor(red: 0.57, green: 0.36, blue: 1.00, alpha: 0.42) // 明亮紫
+        case .sky:   return NSColor(red: 0.55, green: 0.86, blue: 0.22, alpha: 0.48) // 青柠绿
+        case .lilac: return NSColor(red: 0.12, green: 0.78, blue: 0.69, alpha: 0.45) // 湖水青
+        }
+    }
+
     /// 正文文字颜色 (暖墨色, 深一点保证醒目)
     var text: NSColor {
         NSColor(red: 0.16, green: 0.15, blue: 0.13, alpha: 1)
@@ -99,6 +111,79 @@ enum SnapEdge: String, Codable {
     case left, right
 }
 
+/// 文字便签中的一段荧光标记。范围使用 UTF-16，与 NSTextView/NSRange 一致。
+struct TextHighlight: Codable, Equatable {
+    var location: Int
+    var length: Int
+
+    var range: NSRange { NSRange(location: location, length: length) }
+
+    init(_ range: NSRange) {
+        location = range.location
+        length = range.length
+    }
+}
+
+extension Array where Element == TextHighlight {
+    /// 并入一段, 与已有高亮相接的自动合成一段
+    func adding(_ range: NSRange) -> [TextHighlight] {
+        guard range.length > 0 else { return self }
+        var out: [NSRange] = []
+        for r in (map(\.range) + [range]).sorted(by: { $0.location < $1.location }) where r.length > 0 {
+            if let last = out.last, r.location <= NSMaxRange(last) {
+                out[out.count - 1] = NSUnionRange(last, r)
+            } else {
+                out.append(r)
+            }
+        }
+        return out.map(TextHighlight.init)
+    }
+
+    /// 挖掉一段, 被从中间穿过的高亮断成两截
+    func removing(_ range: NSRange) -> [TextHighlight] {
+        guard range.length > 0 else { return self }
+        return flatMap { h -> [NSRange] in
+            let overlap = NSIntersectionRange(h.range, range)
+            guard overlap.length > 0 else { return [h.range] }
+            var parts: [NSRange] = []
+            if h.location < overlap.location {
+                parts.append(NSRange(location: h.location, length: overlap.location - h.location))
+            }
+            if NSMaxRange(overlap) < NSMaxRange(h.range) {
+                parts.append(NSRange(location: NSMaxRange(overlap),
+                                     length: NSMaxRange(h.range) - NSMaxRange(overlap)))
+            }
+            return parts
+        }.map(TextHighlight.init)
+    }
+
+    func covers(_ range: NSRange) -> Bool {
+        contains { NSIntersectionRange($0.range, range).length > 0 }
+    }
+
+    /// 文字被替换后平移。落进替换区里的部分直接丢掉,
+    /// 所以全选改写会让高亮自然清空, 不需要额外判断。
+    func shifting(replacing old: NSRange, newLength: Int) -> [TextHighlight] {
+        let delta = newLength - old.length
+        let oldEnd = NSMaxRange(old)
+        return flatMap { h -> [NSRange] in
+            let r = h.range, hEnd = NSMaxRange(r)
+            if hEnd <= old.location { return [r] }
+            if r.location >= oldEnd { return [NSRange(location: r.location + delta, length: r.length)] }
+            // 在高亮内部打字: 新字一并纳进这段高亮
+            if old.length == 0 { return [NSRange(location: r.location, length: r.length + delta)] }
+            var parts: [NSRange] = []
+            if r.location < old.location {
+                parts.append(NSRange(location: r.location, length: old.location - r.location))
+            }
+            if hEnd > oldEnd {
+                parts.append(NSRange(location: oldEnd + delta, length: hEnd - oldEnd))
+            }
+            return parts
+        }.map(TextHighlight.init)
+    }
+}
+
 // MARK: - 便签模型
 
 final class Note: ObservableObject, Identifiable, Codable {
@@ -109,6 +194,10 @@ final class Note: ObservableObject, Identifiable, Codable {
     @Published var isPreview: Bool   // true = 渲染 Markdown, false = 编辑原文
     @Published var isCollapsed: Bool // true = 折叠成一行标题
     @Published var snappedEdge: SnapEdge?  // 折叠条吸附在屏幕哪条边
+    @Published var highlights: [TextHighlight]
+    /// 荧光笔模式。纯 UI 状态不进 Codable, 但要放在这里,
+    /// 窗口层才能统一处理 Esc / ⌘⇧H (待办和预览没有 NSTextView 接管按键)。
+    @Published var highlighterMode = false
     let kind: NoteKind
     var frame: CGRect
     var expandedFrame: CGRect        // 折叠前的尺寸, 展开时恢复
@@ -121,6 +210,7 @@ final class Note: ObservableObject, Identifiable, Codable {
          isPreview: Bool = false,
          isCollapsed: Bool = false,
          snappedEdge: SnapEdge? = nil,
+         highlights: [TextHighlight] = [],
          frame: CGRect = .zero,
          expandedFrame: CGRect? = nil) {
         self.id = id
@@ -131,6 +221,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         self.isPreview = isPreview
         self.isCollapsed = isCollapsed
         self.snappedEdge = snappedEdge
+        self.highlights = highlights
         self.frame = frame
         self.expandedFrame = expandedFrame ?? frame
     }
@@ -161,7 +252,8 @@ final class Note: ObservableObject, Identifiable, Codable {
 
     // Codable (手动实现, 因为 @Published 不能自动合成)
     enum CodingKeys: String, CodingKey {
-        case id, text, kind, theme, mode, isPreview, isCollapsed, snap, x, y, w, h, ex, ey, ew, eh
+        case id, text, kind, theme, mode, isPreview, isCollapsed, snap, highlights
+        case x, y, w, h, ex, ey, ew, eh
     }
 
     convenience init(from decoder: Decoder) throws {
@@ -180,15 +272,21 @@ final class Note: ObservableObject, Identifiable, Codable {
                 y: try c.decodeIfPresent(Double.self, forKey: .ey) ?? frame.origin.y,
                 width: ew, height: eh)
         }
+        let text = try c.decode(String.self, forKey: .text)
+        let textLength = (text as NSString).length
+        let highlights = try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? []
         self.init(
             id: try c.decode(UUID.self, forKey: .id),
-            text: try c.decode(String.self, forKey: .text),
+            text: text,
             kind: try c.decodeIfPresent(NoteKind.self, forKey: .kind) ?? .text,
             theme: try c.decodeIfPresent(NoteTheme.self, forKey: .theme) ?? .lemon,
             mode: try c.decodeIfPresent(NoteMode.self, forKey: .mode) ?? .floating,
             isPreview: try c.decodeIfPresent(Bool.self, forKey: .isPreview) ?? false,
             isCollapsed: try c.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false,
             snappedEdge: try c.decodeIfPresent(SnapEdge.self, forKey: .snap),
+            highlights: highlights.filter {
+                $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength
+            },
             frame: frame,
             expandedFrame: expanded
         )
@@ -204,6 +302,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         try c.encode(isPreview, forKey: .isPreview)
         try c.encode(isCollapsed, forKey: .isCollapsed)
         try c.encodeIfPresent(snappedEdge, forKey: .snap)
+        if !highlights.isEmpty { try c.encode(highlights, forKey: .highlights) }
         try c.encode(frame.origin.x, forKey: .x)
         try c.encode(frame.origin.y, forKey: .y)
         try c.encode(frame.width, forKey: .w)
@@ -238,10 +337,42 @@ extension Note {
         }
     }
 
-    private func writeTodos(_ items: [TodoItem]) {
+    /// 条目一增删改字, 后面所有条目在 text 里的位置就整体平移。
+    /// 高亮按「第几条 + 条内偏移」重新落位, 否则涂过的荧光会飘到别的字上。
+    private func rebuildText(_ items: [TodoItem]) {
         text = items
             .map { "\($0.done ? "[x]" : "[ ]") \($0.text)" }
             .joined(separator: "\n")
+    }
+
+    private func writeTodos(_ items: [TodoItem], keeping anchors: [HighlightAnchor]? = nil) {
+        let carried = anchors ?? highlightAnchors()
+        rebuildText(items)
+        var rebuilt: [TextHighlight] = []
+        for a in carried {
+            guard let r = todoContentRange(a.item) else { continue }
+            let length = min(a.length, max(0, r.length - a.offset))
+            guard length > 0 else { continue }
+            rebuilt = rebuilt.adding(NSRange(location: r.location + a.offset, length: length))
+        }
+        if highlights != rebuilt { highlights = rebuilt }
+    }
+
+    struct HighlightAnchor {
+        let item: Int, offset: Int, length: Int
+    }
+
+    private func highlightAnchors() -> [HighlightAnchor] {
+        guard !highlights.isEmpty else { return [] }
+        return todoItems.indices.flatMap { i -> [HighlightAnchor] in
+            guard let r = todoContentRange(i) else { return [] }
+            return highlights.compactMap {
+                let overlap = NSIntersectionRange($0.range, r)
+                guard overlap.length > 0 else { return nil }
+                return HighlightAnchor(item: i, offset: overlap.location - r.location,
+                                       length: overlap.length)
+            }
+        }
     }
 
     func toggleTodo(_ index: Int) {
@@ -251,11 +382,13 @@ extension Note {
         writeTodos(items)
     }
 
+    /// 只由条内直接编辑调用。高亮已经被编辑器按全局范围平移过了
+    /// (后面条目的位置也一并挪好), 这里再按锚点重定位反而会把它算丢。
     func setTodoText(_ index: Int, _ newText: String) {
         var items = todoItems
         guard items.indices.contains(index) else { return }
         items[index].text = newText
-        writeTodos(items)
+        rebuildText(items)
     }
 
     func addTodo(_ itemText: String) {
@@ -269,8 +402,38 @@ extension Note {
     func removeTodo(_ index: Int) {
         var items = todoItems
         guard items.indices.contains(index) else { return }
+        // 删掉这条自己的高亮, 它后面的条目整体前移一位
+        let anchors = highlightAnchors()
+            .filter { $0.item != index }
+            .map { HighlightAnchor(item: $0.item > index ? $0.item - 1 : $0.item,
+                                   offset: $0.offset, length: $0.length) }
         items.remove(at: index)
-        writeTodos(items)
+        writeTodos(items, keeping: anchors)
+    }
+
+    /// 第 index 条待办的文字在 text 里的范围 (不含 "[ ] " 前缀和行首空格)
+    func todoContentRange(_ index: Int) -> NSRange? {
+        var offset = 0, item = 0
+        for line in text.components(separatedBy: "\n") {
+            let lineLength = (line as NSString).length
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                if item == index {
+                    let lead = (line as NSString).range(of: trimmed).location
+                    var prefix = 0
+                    for p in ["[x] ", "[X] ", "[ ] "] where trimmed.hasPrefix(p) {
+                        prefix = 4
+                        break
+                    }
+                    let length = (trimmed as NSString).length - prefix
+                    guard length > 0 else { return nil }
+                    return NSRange(location: offset + lead + prefix, length: length)
+                }
+                item += 1
+            }
+            offset += lineLength + 1
+        }
+        return nil
     }
 
     /// 文字便签 Markdown 里的任务行: 按行号切换 "- [ ]" ↔ "- [x]"
@@ -296,7 +459,34 @@ struct ArchivedNote: Codable, Identifiable {
     let text: String
     let kind: NoteKind
     let theme: NoteTheme
+    let highlights: [TextHighlight]
     let deletedAt: Date
+
+    init(id: UUID, text: String, kind: NoteKind, theme: NoteTheme,
+         highlights: [TextHighlight] = [], deletedAt: Date) {
+        self.id = id
+        self.text = text
+        self.kind = kind
+        self.theme = theme
+        self.highlights = highlights
+        self.deletedAt = deletedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, text, kind, theme, highlights, deletedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        kind = try c.decodeIfPresent(NoteKind.self, forKey: .kind) ?? .text
+        theme = try c.decodeIfPresent(NoteTheme.self, forKey: .theme) ?? .lemon
+        let textLength = (text as NSString).length
+        highlights = (try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? [])
+            .filter { $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength }
+        deletedAt = try c.decode(Date.self, forKey: .deletedAt)
+    }
 }
 
 // MARK: - 存储
@@ -349,7 +539,7 @@ final class NoteStore: ObservableObject {
         guard !note.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         archived.insert(
             ArchivedNote(id: UUID(), text: note.text, kind: note.kind,
-                         theme: note.theme, deletedAt: Date()),
+                         theme: note.theme, highlights: note.highlights, deletedAt: Date()),
             at: 0)
         saveHistory()
     }

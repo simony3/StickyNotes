@@ -39,6 +39,7 @@ drag it near the left/right screen edge to snap flush, with the edge-side corner
 - **Collapsed notes**: collapse a note into a single title bar — the title comes from the first line and is never truncated; todo notes show completion progress (e.g. `2/4`); collapsed state persists across restarts
 - **Edge snapping**: drag a collapsed bar near the left/right screen edge to snap flush — the edge-side corners turn square (as if "cut off" by the screen), with trackpad haptic feedback; release to settle smoothly
 - **Checkable preview**: in text-note preview mode, the checkboxes rendered from `- [ ]` are directly clickable, and the source text stays in sync
+- **Highlighter**: drag across text to mark it just like a real highlighter — works in both text and todo notes; backspace erases character by character, the highlight color matches each note's theme, and highlights persist, follow your edits, and stay visible in preview mode
 - **AI integration (MCP)**: built-in MCP server so AI assistants like Codex / Claude can create, edit, delete, move, collapse, and restore notes directly (see below)
 - **Five soft colors**: Morandi-style lemon yellow / peach pink / mint green / sky blue / lilac purple
 - **Glassmorphism design**: frosted translucent background, gradient glass border, serif headings
@@ -71,6 +72,7 @@ open /Applications/StickyNotes.app
 | Collapse / expand | Collapse button at the far right of the top bar |
 | Edge snap | Drag a collapsed bar near the left/right screen edge (snaps within 16pt, drag away to release) |
 | Check off todos | Click the checkbox in a todo note; clicking `- [ ]` boxes in text-note preview works too |
+| Highlighter | Top-bar highlighter button or `⌘⇧H` to enter the mode: drag to paint, click to place the caret, backspace to erase, Esc to exit; the right-click menu erases the selection or clears all highlights |
 | Delete note | ✕ at the top left (archived into history, recoverable) |
 | View / restore history | Menu bar → "History" |
 | Summon all notes | Click the app icon |
