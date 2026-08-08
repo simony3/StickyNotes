@@ -73,6 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         menu.addItem(loginItem)
 
+        menu.addItem(NSMenuItem(
+            title: "加粗快捷键: \(BoldShortcut.display)",
+            action: #selector(setBoldShortcut), keyEquivalent: ""))
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
@@ -103,7 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func createNote(kind: NoteKind, text: String = "", theme: NoteTheme? = nil,
                             mode: NoteMode = .floating, preview: Bool = false,
-                            collapsed: Bool = false) -> Note {
+                            collapsed: Bool = false,
+                            highlights: [TextHighlight] = [],
+                            bolds: [TextHighlight] = []) -> Note {
         let cascade = CGFloat(controllers.count % 8) * 28
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = CGRect(
@@ -118,7 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? NoteTheme.allCases[NoteStore.shared.notes.count % NoteTheme.allCases.count]
 
         let note = Note(text: text, kind: kind, theme: nextTheme,
-                        mode: mode, isPreview: preview, frame: frame)
+                        mode: mode, isPreview: preview,
+                        highlights: highlights, bolds: bolds, frame: frame)
         NoteStore.shared.add(note)
         showWindow(note)
         if collapsed {
@@ -135,8 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 创建:
     //   open "stickynotes://add?kind=todo&theme=mint&text=%E5%86%85%E5%AE%B9"
     // 参数: kind=text|todo, theme=lemon|peach|mint|sky|lilac,
-    //       mode=floating|normal|desktop, preview=1, collapsed=1, text=百分号编码内容
+    //       mode=floating|normal|desktop, preview=1, collapsed=1, text=百分号编码内容,
+    //       highlight/bold=荧光和加粗范围, 格式 "起点,长度;起点,长度" (UTF-16), 空串=清空
     // 更新: stickynotes://update?id=<UUID>&text=...&theme=...&mode=...&preview=0|1&collapsed=0|1
+    //       &highlight=...&bold=...  (改了 text 又不传标记, 旧标记会被清空)
     // 删除: stickynotes://delete?id=<UUID>
     // 恢复: stickynotes://restore?id=<历史记录 UUID>
     // 删除历史: stickynotes://history-delete?id=<历史记录 UUID>
@@ -158,22 +167,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch url.host {
         case "add":
+            let text = q["text"] ?? ""
             createNote(
                 kind: NoteKind(rawValue: q["kind"] ?? "") ?? .text,
-                text: q["text"] ?? "",
+                text: text,
                 theme: NoteTheme(rawValue: q["theme"] ?? ""),
                 mode: NoteMode(rawValue: q["mode"] ?? "") ?? .floating,
                 preview: q["preview"] == "1",
-                collapsed: q["collapsed"] == "1")
+                collapsed: q["collapsed"] == "1",
+                highlights: parseMarks(q["highlight"], in: text),
+                bolds: parseMarks(q["bold"], in: text))
 
         case "update":
             guard let idStr = q["id"], let id = UUID(uuidString: idStr),
                   let note = NoteStore.shared.notes.first(where: { $0.id == id }) else { return }
             if let text = q["text"] {
                 note.text = text
-                // 外部入口是整段替换，旧文字范围已不再可靠。
+                // 外部入口是整段替换，旧文字范围已不再可靠;
+                // 调用方要保留标记就自己算好新范围一起传进来。
                 note.highlights = []
+                note.bolds = []
             }
+            if let marks = q["highlight"] { note.highlights = parseMarks(marks, in: note.text) }
+            if let marks = q["bold"] { note.bolds = parseMarks(marks, in: note.text) }
             if let theme = NoteTheme(rawValue: q["theme"] ?? "") { note.theme = theme }
             if let mode = NoteMode(rawValue: q["mode"] ?? "") {
                 note.mode = mode
@@ -230,6 +246,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 标记参数格式: "起点,长度;起点,长度" (UTF-16 下标), 空串表示清空。
+    /// 越界的段直接丢掉, 免得外部工具算错位置把文字画花。
+    private func parseMarks(_ value: String?, in text: String) -> [TextHighlight] {
+        guard let value, !value.isEmpty else { return [] }
+        let limit = (text as NSString).length
+        return value.split(separator: ";").compactMap { pair in
+            let parts = pair.split(separator: ",")
+            guard parts.count == 2, let loc = Int(parts[0]), let len = Int(parts[1]),
+                  loc >= 0, len > 0, loc + len <= limit else { return nil }
+            return TextHighlight(NSRange(location: loc, length: len))
+        }
+    }
+
     private func queryBool(_ value: String?) -> Bool? {
         switch value?.lowercased() {
         case "1", "true", "yes":  return true
@@ -272,6 +301,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "\(error.localizedDescription)\n\n提示: 应用需要放在“应用程序”文件夹中才能注册开机启动。"
             alert.runModal()
         }
+    }
+
+    /// 改加粗快捷键: 弹窗期间直接按下新组合键即可
+    @objc private func setBoldShortcut(_ sender: NSMenuItem) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "设置加粗快捷键"
+        alert.informativeText = "现在按下新的组合键 (至少含 ⌘/⌃/⌥ 之一)。当前: \(BoldShortcut.display)"
+        alert.addButton(withTitle: "恢复默认 ⌘B")
+        alert.addButton(withTitle: "取消")
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            guard !mods.intersection([.command, .control, .option]).isEmpty,
+                  let ch = event.charactersIgnoringModifiers?.lowercased(),
+                  ch.count == 1, ch != " " else { return event }
+            BoldShortcut.save(key: ch, modifiers: mods)
+            NSApp.abortModal()
+            return nil
+        }
+        let response = alert.runModal()
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        if response == .alertFirstButtonReturn {
+            BoldShortcut.save(key: "b", modifiers: [.command])
+        }
+        sender.title = "加粗快捷键: \(BoldShortcut.display)"
     }
 
     @objc private func quit() {
@@ -338,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let note = Note(
             text: archived.text, kind: archived.kind, theme: archived.theme,
             highlights: archived.highlights,
+            bolds: archived.bolds,
             frame: CGRect(x: screen.midX - 140 + cascade, y: screen.midY - 20 - cascade,
                           width: 280, height: 280))
         NoteStore.shared.add(note)

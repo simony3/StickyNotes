@@ -59,6 +59,19 @@ BASE_TOOLS = [
                     "type": "boolean",
                     "description": "true 则折叠成一行标题条",
                 },
+                "highlight": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "要涂荧光笔的词句, 必须是 text 里原样出现的片段; "
+                        "同一个词出现几次就标几次。别整段整段地标, 只标重点。"
+                    ),
+                },
+                "bold": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要加粗的词句, 规则同 highlight",
+                },
             },
             "required": ["text", "kind"],
         },
@@ -66,8 +79,9 @@ BASE_TOOLS = [
     {
         "name": "update_note",
         "description": (
-            "修改指定便签的内容、颜色、窗口模式、预览或折叠状态。"
+            "修改指定便签的内容、颜色、窗口模式、预览或折叠状态, 也可以重设荧光/加粗标记。"
             "先用 list_notes 取得 id；只传需要改的字段。text 是完整替换，不是追加。"
+            "只改 text 时会尽量把原有标记按文字内容找回来。"
         ),
         "inputSchema": {
             "type": "object",
@@ -86,18 +100,35 @@ BASE_TOOLS = [
                 },
                 "preview": {"type": "boolean", "description": "是否预览 Markdown"},
                 "collapsed": {"type": "boolean", "description": "是否折叠"},
+                "highlight": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "重设荧光笔标记: 传入要涂的词句 (便签正文里原样出现的片段), "
+                        "整体替换原有荧光标记; 传空数组 [] 表示清空全部荧光。"
+                    ),
+                },
+                "bold": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "重设加粗标记, 规则同 highlight; [] 表示取消全部加粗",
+                },
             },
             "required": ["id"],
             "anyOf": [
                 {"required": ["text"]}, {"required": ["theme"]},
                 {"required": ["mode"]}, {"required": ["preview"]},
-                {"required": ["collapsed"]},
+                {"required": ["collapsed"]}, {"required": ["highlight"]},
+                {"required": ["bold"]},
             ],
         },
     },
     {
         "name": "list_notes",
-        "description": "列出用户当前屏幕上的所有便签, 含 id (供 update_note 使用)、内容、类型、颜色、折叠状态。",
+        "description": (
+            "列出用户当前屏幕上的所有便签, 含 id (供 update_note 使用)、内容、类型、"
+            "颜色、折叠状态, 以及用户涂过荧光笔和加粗的词句。"
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -329,6 +360,66 @@ def _encode(params):
     return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
 
+def _u16len(s):
+    """便签里的标记范围按 UTF-16 存 (和 NSRange 一致), emoji 算两格。"""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _u16slice(s, location, length):
+    raw = s.encode("utf-16-le")[location * 2:(location + length) * 2]
+    return raw.decode("utf-16-le", "ignore")
+
+
+def _mark_ranges(text, needles, label):
+    """把要标记的词换算成 UTF-16 范围。同一个词出现几次就标几次。"""
+    if isinstance(needles, str):
+        needles = [needles]
+    if not isinstance(needles, list):
+        raise ValueError("{} 必须是字符串数组".format(label))
+    out, missing = [], []
+    for needle in needles:
+        if not isinstance(needle, str):
+            raise ValueError("{} 的每一项都必须是字符串".format(label))
+        if not needle:
+            continue
+        start, found = 0, False
+        while True:
+            i = text.find(needle, start)
+            if i < 0:
+                break
+            out.append((_u16len(text[:i]), _u16len(needle)))
+            start = i + len(needle)
+            found = True
+        if not found:
+            missing.append(needle)
+    return out, missing
+
+
+def _encode_marks(ranges):
+    return ";".join("{},{}".format(loc, length) for loc, length in ranges)
+
+
+def _carry_marks(old_text, old_marks, new_text):
+    """整段替换后按「原文标的是哪几个字」在新文里重新找回来, 找不到的就丢掉。"""
+    out = []
+    for m in old_marks or []:
+        try:
+            piece = _u16slice(old_text, int(m["location"]), int(m["length"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        i = new_text.find(piece)
+        if piece and i >= 0:
+            out.append((_u16len(new_text[:i]), _u16len(piece)))
+    return out
+
+
+def _find_note(note_id):
+    for n in _load("notes.json"):
+        if str(n.get("id", "")).lower() == note_id.lower():
+            return n
+    return None
+
+
 def _validate_id(value, label="id"):
     if not value:
         raise ValueError("缺少 {}".format(label))
@@ -365,15 +456,32 @@ def create_note(args):
         params["preview"] = "1"
     if args.get("collapsed"):
         params["collapsed"] = "1"
+
+    notes = []
+    for field, url_key, label in (("highlight", "highlight", "荧光标记"),
+                                  ("bold", "bold", "加粗")):
+        if field not in args:
+            continue
+        ranges, missing = _mark_ranges(params["text"], args[field], field)
+        params[url_key] = _encode_marks(ranges)
+        if ranges:
+            notes.append("{} {} 处".format(label, len(ranges)))
+        if missing:
+            notes.append("{}没找到: {}".format(label, "、".join(missing)))
+
     _open_command("add", params)
-    return "已创建便签: kind={}, {} 字".format(params["kind"], len(params["text"]))
+    summary = "已创建便签: kind={}, {} 字".format(params["kind"], len(params["text"]))
+    return summary + ("; " + "; ".join(notes) if notes else "")
 
 
 def update_note(args):
     params = {"id": _validate_id(args.get("id"))}
-    fields = ("text", "theme", "mode", "preview", "collapsed")
+    fields = ("text", "theme", "mode", "preview", "collapsed", "highlight", "bold")
     if not any(field in args for field in fields):
         raise ValueError("至少传入一个需要修改的字段")
+
+    current = _find_note(params["id"])
+    old_text = (current or {}).get("text", "")
     if "text" in args:
         if not isinstance(args["text"], str):
             raise ValueError("text 必须是字符串")
@@ -389,8 +497,28 @@ def update_note(args):
             if not isinstance(args[field], bool):
                 raise ValueError("{} 必须是布尔值".format(field))
             params[field] = "1" if args[field] else "0"
+
+    # 换了正文又没指定标记时, 按原来标的是哪几个字在新文里找回来,
+    # 免得 AI 改一句话就把用户涂的荧光和加粗全弄丢。
+    text_now = params.get("text", old_text)
+    notes = []
+    for field, store_key, label in (("highlight", "highlights", "荧光标记"),
+                                    ("bold", "bolds", "加粗")):
+        if field in args:
+            ranges, missing = _mark_ranges(text_now, args[field], field)
+            params[field] = _encode_marks(ranges)
+            if missing:
+                notes.append("{}没找到: {}".format(label, "、".join(missing)))
+        elif "text" in args and current:
+            carried = _carry_marks(old_text, current.get(store_key), text_now)
+            if carried or current.get(store_key):
+                params[field] = _encode_marks(carried)
+                kept, total = len(carried), len(current.get(store_key) or [])
+                if total:
+                    notes.append("{}保留 {}/{} 处".format(label, kept, total))
+
     _open_command("update", params)
-    return "已更新便签 {}".format(params["id"])
+    return "已更新便签 {}".format(params["id"]) + ("; " + "; ".join(notes) if notes else "")
 
 
 def delete_note(args):
@@ -456,10 +584,18 @@ def list_notes(_args):
         return "当前没有便签。"
     lines = []
     for i, n in enumerate(notes):
+        text = n.get("text", "")
+        marks = ""
+        for key, label in (("highlights", "荧光"), ("bolds", "加粗")):
+            pieces = [_u16slice(text, m.get("location", 0), m.get("length", 0))
+                      for m in n.get(key) or []]
+            pieces = [p for p in pieces if p]
+            if pieces:
+                marks += "{}: {}\n".format(label, "、".join(pieces))
         lines.append(
             "--- 便签 {} ---\n"
             "id={} | kind={} | theme={} | mode={} | preview={} | collapsed={}\n"
-            "frame: x={}, y={}, width={}, height={}\n{}".format(
+            "frame: x={}, y={}, width={}, height={}\n{}{}".format(
                 i + 1,
                 n.get("id", "?"),
                 n.get("kind", "text"),
@@ -469,7 +605,8 @@ def list_notes(_args):
                 bool(n.get("isCollapsed")),
                 n.get("x", "?"), n.get("y", "?"),
                 n.get("w", "?"), n.get("h", "?"),
-                n.get("text", ""),
+                marks,
+                text,
             )
         )
     return "\n".join(lines)
@@ -542,7 +679,7 @@ def main():
                 "protocolVersion": msg.get("params", {}).get(
                     "protocolVersion", "2024-11-05"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "stickynotes", "version": "1.1.0"},
+                "serverInfo": {"name": "stickynotes", "version": "1.2.0"},
             })
         elif method == "tools/list":
             reply(msg_id, {"tools": TOOLS})

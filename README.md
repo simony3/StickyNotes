@@ -96,14 +96,16 @@ open /Applications/StickyNotes.app
 
 | 工具 | 说明 |
 |---|---|
-| `create_note` | 创建便签（类型 / 颜色 / 窗口模式 / 折叠等全参数） |
-| `update_note` | 按 id 修改内容、颜色、窗口模式、预览和折叠状态 |
+| `create_note` | 创建便签（类型 / 颜色 / 窗口模式 / 折叠等全参数，可直接指定要涂荧光和加粗的词） |
+| `update_note` | 按 id 修改内容、颜色、窗口模式、预览和折叠状态，也能重设荧光/加粗标记 |
 | `delete_note` | 删除便签（非空内容自动进入历史） |
 | `move_resize_note` | 移动便签或调整窗口大小 |
 | `list_notes` / `list_history` | 读取当前便签和历史归档（含操作所需 id） |
 | `restore_note` | 将历史归档恢复成便签 |
 | `delete_history_item` | 彻底删除指定历史记录 |
 | `show_all_notes` / `show_history` | 唤起所有便签或打开历史窗口 |
+
+标记按「文字内容」指定而不是下标：`highlight: ["重点"]` 会把便签里每一处"重点"都涂上荧光，`bold` 同理；传 `[]` 表示清空。只用 `update_note` 改正文时，原有的荧光和加粗会按标过的字自动在新内容里找回来，不会因为 AI 改了一句话就全丢。
 
 日常修改都会以细粒度命令交给正在运行的 App，不直接重写 JSON，也不需要重启。批量迁移/灾难恢复用的 `admin_export_data` 和 `admin_overwrite_data` 默认隐藏；只有为 MCP 进程设置 `STICKYNOTES_ENABLE_ADMIN_TOOLS=1` 才会暴露，且覆盖数据必须携带版本号并显式确认。
 

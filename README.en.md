@@ -96,14 +96,16 @@ The project ships a zero-dependency [MCP](https://modelcontextprotocol.io/) serv
 
 | Tool | Description |
 |---|---|
-| `create_note` | Create a note (full parameters: type / color / window mode / collapsed, etc.) |
-| `update_note` | Change content, color, window mode, preview, or collapsed state by id |
+| `create_note` | Create a note (full parameters: type / color / window mode / collapsed, plus words to highlight or bold) |
+| `update_note` | Change content, color, window mode, preview, or collapsed state by id — and reset highlight/bold marks |
 | `delete_note` | Delete a note (non-empty content is archived automatically) |
 | `move_resize_note` | Move or resize a note window |
 | `list_notes` / `list_history` | Read active notes and history, including ids needed by other tools |
 | `restore_note` | Restore an archived item as a note |
 | `delete_history_item` | Permanently delete one history item |
 | `show_all_notes` / `show_history` | Bring notes forward or open the history window |
+
+Marks are specified by text, not offsets: `highlight: ["key point"]` paints every occurrence of "key point" in the note, and `bold` works the same way; pass `[]` to clear. When `update_note` only replaces the text, existing highlights and bold runs are re-anchored by the words they covered, so an AI rewording one sentence doesn't wipe them all.
 
 Everyday changes are sent to the running app as granular commands, so the MCP server neither rewrites the JSON database nor restarts the app. The bulk migration/recovery tools `admin_export_data` and `admin_overwrite_data` are hidden by default. Set `STICKYNOTES_ENABLE_ADMIN_TOOLS=1` for the MCP process to expose them; an overwrite also requires an exact data revision and explicit confirmation.
 

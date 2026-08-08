@@ -161,6 +161,13 @@ extension Array where Element == TextHighlight {
         contains { NSIntersectionRange($0.range, range).length > 0 }
     }
 
+    /// 整段都落在同一段标记之内 (adding 合并相邻段, 全覆盖时必在单段里)
+    func coversFully(_ range: NSRange) -> Bool {
+        guard range.length > 0 else { return false }
+        return contains { NSLocationInRange(range.location, $0.range)
+            && NSMaxRange(range) <= NSMaxRange($0.range) }
+    }
+
     /// 文字被替换后平移。落进替换区里的部分直接丢掉,
     /// 所以全选改写会让高亮自然清空, 不需要额外判断。
     func shifting(replacing old: NSRange, newLength: Int) -> [TextHighlight] {
@@ -195,6 +202,7 @@ final class Note: ObservableObject, Identifiable, Codable {
     @Published var isCollapsed: Bool // true = 折叠成一行标题
     @Published var snappedEdge: SnapEdge?  // 折叠条吸附在屏幕哪条边
     @Published var highlights: [TextHighlight]
+    @Published var bolds: [TextHighlight]
     /// 荧光笔模式。纯 UI 状态不进 Codable, 但要放在这里,
     /// 窗口层才能统一处理 Esc / ⌘⇧H (待办和预览没有 NSTextView 接管按键)。
     @Published var highlighterMode = false
@@ -211,6 +219,7 @@ final class Note: ObservableObject, Identifiable, Codable {
          isCollapsed: Bool = false,
          snappedEdge: SnapEdge? = nil,
          highlights: [TextHighlight] = [],
+         bolds: [TextHighlight] = [],
          frame: CGRect = .zero,
          expandedFrame: CGRect? = nil) {
         self.id = id
@@ -222,6 +231,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         self.isCollapsed = isCollapsed
         self.snappedEdge = snappedEdge
         self.highlights = highlights
+        self.bolds = bolds
         self.frame = frame
         self.expandedFrame = expandedFrame ?? frame
     }
@@ -252,7 +262,7 @@ final class Note: ObservableObject, Identifiable, Codable {
 
     // Codable (手动实现, 因为 @Published 不能自动合成)
     enum CodingKeys: String, CodingKey {
-        case id, text, kind, theme, mode, isPreview, isCollapsed, snap, highlights
+        case id, text, kind, theme, mode, isPreview, isCollapsed, snap, highlights, bolds
         case x, y, w, h, ex, ey, ew, eh
     }
 
@@ -274,7 +284,10 @@ final class Note: ObservableObject, Identifiable, Codable {
         }
         let text = try c.decode(String.self, forKey: .text)
         let textLength = (text as NSString).length
-        let highlights = try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? []
+        func ranges(_ key: CodingKeys) throws -> [TextHighlight] {
+            (try c.decodeIfPresent([TextHighlight].self, forKey: key) ?? [])
+                .filter { $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength }
+        }
         self.init(
             id: try c.decode(UUID.self, forKey: .id),
             text: text,
@@ -284,9 +297,8 @@ final class Note: ObservableObject, Identifiable, Codable {
             isPreview: try c.decodeIfPresent(Bool.self, forKey: .isPreview) ?? false,
             isCollapsed: try c.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false,
             snappedEdge: try c.decodeIfPresent(SnapEdge.self, forKey: .snap),
-            highlights: highlights.filter {
-                $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength
-            },
+            highlights: try ranges(.highlights),
+            bolds: try ranges(.bolds),
             frame: frame,
             expandedFrame: expanded
         )
@@ -303,6 +315,7 @@ final class Note: ObservableObject, Identifiable, Codable {
         try c.encode(isCollapsed, forKey: .isCollapsed)
         try c.encodeIfPresent(snappedEdge, forKey: .snap)
         if !highlights.isEmpty { try c.encode(highlights, forKey: .highlights) }
+        if !bolds.isEmpty { try c.encode(bolds, forKey: .bolds) }
         try c.encode(frame.origin.x, forKey: .x)
         try c.encode(frame.origin.y, forKey: .y)
         try c.encode(frame.width, forKey: .w)
@@ -345,28 +358,36 @@ extension Note {
             .joined(separator: "\n")
     }
 
-    private func writeTodos(_ items: [TodoItem], keeping anchors: [HighlightAnchor]? = nil) {
-        let carried = anchors ?? highlightAnchors()
+    private func writeTodos(_ items: [TodoItem],
+                            keeping carried: (h: [HighlightAnchor], b: [HighlightAnchor])? = nil) {
+        let kept = carried ?? (h: anchors(of: highlights), b: anchors(of: bolds))
         rebuildText(items)
-        var rebuilt: [TextHighlight] = []
-        for a in carried {
+        let h = rebuilt(from: kept.h)
+        let b = rebuilt(from: kept.b)
+        if highlights != h { highlights = h }
+        if bolds != b { bolds = b }
+    }
+
+    private func rebuilt(from anchors: [HighlightAnchor]) -> [TextHighlight] {
+        var out: [TextHighlight] = []
+        for a in anchors {
             guard let r = todoContentRange(a.item) else { continue }
             let length = min(a.length, max(0, r.length - a.offset))
             guard length > 0 else { continue }
-            rebuilt = rebuilt.adding(NSRange(location: r.location + a.offset, length: length))
+            out = out.adding(NSRange(location: r.location + a.offset, length: length))
         }
-        if highlights != rebuilt { highlights = rebuilt }
+        return out
     }
 
     struct HighlightAnchor {
         let item: Int, offset: Int, length: Int
     }
 
-    private func highlightAnchors() -> [HighlightAnchor] {
-        guard !highlights.isEmpty else { return [] }
+    private func anchors(of marks: [TextHighlight]) -> [HighlightAnchor] {
+        guard !marks.isEmpty else { return [] }
         return todoItems.indices.flatMap { i -> [HighlightAnchor] in
             guard let r = todoContentRange(i) else { return [] }
-            return highlights.compactMap {
+            return marks.compactMap {
                 let overlap = NSIntersectionRange($0.range, r)
                 guard overlap.length > 0 else { return nil }
                 return HighlightAnchor(item: i, offset: overlap.location - r.location,
@@ -402,13 +423,15 @@ extension Note {
     func removeTodo(_ index: Int) {
         var items = todoItems
         guard items.indices.contains(index) else { return }
-        // 删掉这条自己的高亮, 它后面的条目整体前移一位
-        let anchors = highlightAnchors()
-            .filter { $0.item != index }
-            .map { HighlightAnchor(item: $0.item > index ? $0.item - 1 : $0.item,
-                                   offset: $0.offset, length: $0.length) }
+        // 删掉这条自己的标记, 它后面的条目整体前移一位
+        func dropped(_ list: [HighlightAnchor]) -> [HighlightAnchor] {
+            list.filter { $0.item != index }
+                .map { HighlightAnchor(item: $0.item > index ? $0.item - 1 : $0.item,
+                                       offset: $0.offset, length: $0.length) }
+        }
+        let carried = (h: dropped(anchors(of: highlights)), b: dropped(anchors(of: bolds)))
         items.remove(at: index)
-        writeTodos(items, keeping: anchors)
+        writeTodos(items, keeping: carried)
     }
 
     /// 第 index 条待办的文字在 text 里的范围 (不含 "[ ] " 前缀和行首空格)
@@ -460,20 +483,22 @@ struct ArchivedNote: Codable, Identifiable {
     let kind: NoteKind
     let theme: NoteTheme
     let highlights: [TextHighlight]
+    let bolds: [TextHighlight]
     let deletedAt: Date
 
     init(id: UUID, text: String, kind: NoteKind, theme: NoteTheme,
-         highlights: [TextHighlight] = [], deletedAt: Date) {
+         highlights: [TextHighlight] = [], bolds: [TextHighlight] = [], deletedAt: Date) {
         self.id = id
         self.text = text
         self.kind = kind
         self.theme = theme
         self.highlights = highlights
+        self.bolds = bolds
         self.deletedAt = deletedAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, text, kind, theme, highlights, deletedAt
+        case id, text, kind, theme, highlights, bolds, deletedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -483,8 +508,12 @@ struct ArchivedNote: Codable, Identifiable {
         kind = try c.decodeIfPresent(NoteKind.self, forKey: .kind) ?? .text
         theme = try c.decodeIfPresent(NoteTheme.self, forKey: .theme) ?? .lemon
         let textLength = (text as NSString).length
-        highlights = (try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? [])
-            .filter { $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength }
+        func ranges(_ key: CodingKeys) throws -> [TextHighlight] {
+            (try c.decodeIfPresent([TextHighlight].self, forKey: key) ?? [])
+                .filter { $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= textLength }
+        }
+        highlights = try ranges(.highlights)
+        bolds = try ranges(.bolds)
         deletedAt = try c.decode(Date.self, forKey: .deletedAt)
     }
 }
@@ -539,7 +568,8 @@ final class NoteStore: ObservableObject {
         guard !note.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         archived.insert(
             ArchivedNote(id: UUID(), text: note.text, kind: note.kind,
-                         theme: note.theme, highlights: note.highlights, deletedAt: Date()),
+                         theme: note.theme, highlights: note.highlights,
+                         bolds: note.bolds, deletedAt: Date()),
             at: 0)
         saveHistory()
     }

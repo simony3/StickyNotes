@@ -252,7 +252,8 @@ struct NoteView: View {
             TodoListView(note: note, readOnly: note.isPreview, highlighterMode: highlighterMode)
         } else if note.isPreview {
             ScrollView {
-                MarkdownText(source: note.text, highlights: note.highlights, theme: note.theme,
+                MarkdownText(source: note.text, highlights: note.highlights,
+                             bolds: note.bolds, theme: note.theme,
                              onToggleTask: { note.toggleTaskLine($0) })
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
@@ -261,6 +262,7 @@ struct NoteView: View {
             HighlightedTextEditor(
                 text: $note.text,
                 highlights: $note.highlights,
+                bolds: $note.bolds,
                 theme: note.theme,
                 highlighterMode: $note.highlighterMode,
                 eraseAllToken: eraseAllToken)
@@ -286,6 +288,7 @@ func highlighterCursor(_ color: NSColor) -> NSCursor {
 struct HighlightedTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var highlights: [TextHighlight]
+    @Binding var bolds: [TextHighlight]
     let theme: NoteTheme
     @Binding var highlighterMode: Bool
     let eraseAllToken: Int   // 顶栏「清空全部」按钮的信号, 值变了就执行一次
@@ -338,6 +341,8 @@ struct HighlightedTextEditor: NSViewRepresentable {
         textView.onEraseAll = { [weak c] in c?.eraseAll() }
         textView.onModeChange = { [weak c] in c?.setMode($0) }
         textView.hasHighlight = { [weak c] in c?.hasHighlight(in: $0) ?? false }
+        textView.onToggleBold = { [weak c] in c?.toggleBold($0) }
+        textView.isBold = { [weak c] in c?.parent.bolds.coversFully($0) ?? false }
 
         scrollView.documentView = textView
         context.coordinator.applyState(to: textView)
@@ -380,6 +385,7 @@ struct HighlightedTextEditor: NSViewRepresentable {
         var lastSyncedText: String?
 
         private var drawn: [TextHighlight] = []
+        private var drawnBolds: [TextHighlight] = []
         private var drawnColor: NSColor?
         private var needsRedraw = true
 
@@ -423,6 +429,8 @@ struct HighlightedTextEditor: NSViewRepresentable {
             // 跟随文字变化的平移不进撤销栈: 撤销文字编辑时这里会被反向调用一次, 自然还原。
             let shifted = parent.highlights.shifting(replacing: replaced, newLength: editedRange.length)
             if shifted != parent.highlights { parent.highlights = shifted }
+            let shiftedBolds = parent.bolds.shifting(replacing: replaced, newLength: editedRange.length)
+            if shiftedBolds != parent.bolds { parent.bolds = shiftedBolds }
             // 此刻 layout manager 还没收到这次编辑, 在这里动 temporary attributes
             // 会打断输入处理, 编辑器从此不再响应按键。只标脏, 等 textDidChange
             // (编辑收尾后) 再重绘。
@@ -490,6 +498,26 @@ struct HighlightedTextEditor: NSViewRepresentable {
             return parent.highlights.contains { NSIntersectionRange($0.range, selection).length > 0 }
         }
 
+        // MARK: 加粗
+
+        func toggleBold(_ range: NSRange) {
+            guard range.length > 0 else { return }
+            if parent.bolds.coversFully(range) {
+                applyBolds(parent.bolds.removing(range), "取消加粗")
+            } else {
+                applyBolds(parent.bolds.adding(range), "加粗")
+            }
+        }
+
+        private func applyBolds(_ new: [TextHighlight], _ actionName: String) {
+            let old = parent.bolds
+            guard old != new else { return }
+            parent.bolds = new
+            textView?.undoManager?.registerUndo(withTarget: self) { $0.applyBolds(old, actionName) }
+            textView?.undoManager?.setActionName(actionName)
+            if let textView { redraw(in: textView) }
+        }
+
         func setMode(_ enabled: Bool) {
             parent.highlighterMode = enabled
             textView?.highlightMode = enabled
@@ -509,18 +537,66 @@ struct HighlightedTextEditor: NSViewRepresentable {
 
         private func redraw(in textView: HighlighterTextView) {
             let color = parent.theme.highlighter
-            guard needsRedraw || drawn != parent.highlights || drawnColor != color,
+            guard needsRedraw || drawn != parent.highlights || drawnBolds != parent.bolds
+                    || drawnColor != color,
                   let lm = textView.layoutManager else { return }
+            // 输入法组字期间不动属性, 上屏后的 textDidChange 会再来一次
+            if textView.hasMarkedText() { needsRedraw = true; return }
             let full = NSRange(location: 0, length: (textView.string as NSString).length)
             lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
             for h in parent.highlights where h.length > 0 && NSMaxRange(h.range) <= full.length {
                 lm.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: h.range)
             }
+            if let ts = textView.textStorage {
+                ts.beginEditing()
+                ts.addAttribute(.font, value: NSFont.systemFont(ofSize: 14), range: full)
+                for b in parent.bolds where b.length > 0 && NSMaxRange(b.range) <= full.length {
+                    ts.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 14), range: b.range)
+                }
+                ts.endEditing()
+            }
             drawn = parent.highlights
+            drawnBolds = parent.bolds
             drawnColor = color
             needsRedraw = false
         }
 
+    }
+}
+
+// MARK: - 加粗快捷键 (菜单栏可改, 默认 ⌘B)
+
+enum BoldShortcut {
+    private static let keyKey = "boldShortcut.key"
+    private static let modsKey = "boldShortcut.modifiers"
+
+    static var key: String { UserDefaults.standard.string(forKey: keyKey) ?? "b" }
+
+    static var modifiers: NSEvent.ModifierFlags {
+        guard let raw = UserDefaults.standard.object(forKey: modsKey) as? UInt else {
+            return [.command]
+        }
+        return NSEvent.ModifierFlags(rawValue: raw)
+    }
+
+    static func save(key: String, modifiers: NSEvent.ModifierFlags) {
+        UserDefaults.standard.set(key, forKey: keyKey)
+        UserDefaults.standard.set(modifiers.rawValue, forKey: modsKey)
+    }
+
+    static func matches(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers?.lowercased() == key
+            && event.modifierFlags
+                .intersection([.command, .control, .option, .shift]) == modifiers
+    }
+
+    static var display: String {
+        var s = ""
+        if modifiers.contains(.control) { s += "⌃" }
+        if modifiers.contains(.option)  { s += "⌥" }
+        if modifiers.contains(.shift)   { s += "⇧" }
+        if modifiers.contains(.command) { s += "⌘" }
+        return s + key.uppercased()
     }
 }
 
@@ -539,6 +615,8 @@ final class HighlighterTextView: NSTextView, NSMenuDelegate {
     var onEraseAll: (() -> Void)?
     var onModeChange: ((Bool) -> Void)?
     var hasHighlight: ((NSRange) -> Bool)?
+    var onToggleBold: ((NSRange) -> Void)?
+    var isBold: ((NSRange) -> Bool)?
 
     private var fullRange: NSRange { NSRange(location: 0, length: (string as NSString).length) }
 
@@ -570,6 +648,12 @@ final class HighlighterTextView: NSTextView, NSMenuDelegate {
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
            event.charactersIgnoringModifiers?.lowercased() == "h" {
             setMode(!highlightMode)
+            return true
+        }
+        // 加粗只在正常编辑态生效, 荧光笔模式不受影响
+        if BoldShortcut.matches(event), !highlightMode, isEditable {
+            let selection = selectedRange()
+            if selection.length > 0 { onToggleBold?(selection) }
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -626,6 +710,14 @@ final class HighlighterTextView: NSTextView, NSMenuDelegate {
                 enabled: !highlightMode
                     && NSPasteboard.general.canReadObject(forClasses: [NSString.self], options: nil))
         addItem("全选", action: #selector(selectAll(_:)), to: menu, enabled: !string.isEmpty)
+
+        let bold = addItem(
+            isBold?(selection) == true ? "取消加粗" : "加粗",
+            action: #selector(toggleBoldFromMenu), to: menu,
+            enabled: !highlightMode && isEditable && selection.length > 0)
+        bold.image = NSImage(systemSymbolName: "bold", accessibilityDescription: nil)
+        bold.keyEquivalent = BoldShortcut.key
+        bold.keyEquivalentModifierMask = BoldShortcut.modifiers
         menu.addItem(.separator())
 
         let highlighter = addItem(
@@ -649,7 +741,7 @@ final class HighlighterTextView: NSTextView, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         let allowedActions = Set([
             "performUndo", "performRedo", "cut:", "copy:", "paste:", "selectAll:",
-            "toggleHighlighter", "eraseSelected", "eraseAll"
+            "toggleBoldFromMenu", "toggleHighlighter", "eraseSelected", "eraseAll"
         ])
         for item in menu.items.reversed() where !item.isSeparatorItem {
             guard let action = item.action,
@@ -681,6 +773,7 @@ final class HighlighterTextView: NSTextView, NSMenuDelegate {
     @objc private func performUndo() { undoManager?.undo() }
     @objc private func performRedo() { undoManager?.redo() }
     @objc private func toggleHighlighter() { setMode(!highlightMode) }
+    @objc private func toggleBoldFromMenu() { onToggleBold?(selectedRange()) }
     @objc private func eraseSelected() { onEraseSelection?(selectedRange()) }
     @objc private func eraseAll() { onEraseAll?() }
 }
@@ -697,6 +790,7 @@ struct HighlightableLine: NSViewRepresentable {
     let text: String
     let baseOffset: Int
     @Binding var highlights: [TextHighlight]
+    @Binding var bolds: [TextHighlight]
     let theme: NoteTheme
     let done: Bool
     let painting: Bool    // 荧光笔模式: 只读 + 可涂
@@ -728,6 +822,8 @@ struct HighlightableLine: NSViewRepresentable {
         tv.onEraseAll = { [weak c] in c?.eraseAll() }
         tv.onModeChange = { [weak c] enabled in if !enabled { c?.parent.onExitMode() } }
         tv.hasHighlight = { [weak c] in c?.hasHighlight(in: $0) ?? false }
+        tv.onToggleBold = { [weak c] in c?.toggleBold($0) }
+        tv.isBold = { [weak c] in c?.isBoldSelection($0) ?? false }
 
         context.coordinator.textView = tv
         context.coordinator.render(tv)
@@ -778,6 +874,8 @@ struct HighlightableLine: NSViewRepresentable {
                                    length: max(0, editedRange.length - delta))
             let shifted = parent.highlights.shifting(replacing: replaced, newLength: editedRange.length)
             if shifted != parent.highlights { parent.highlights = shifted }
+            let shiftedBolds = parent.bolds.shifting(replacing: replaced, newLength: editedRange.length)
+            if shiftedBolds != parent.bolds { parent.bolds = shiftedBolds }
         }
 
         func render(_ tv: HighlighterTextView) {
@@ -809,9 +907,13 @@ struct HighlightableLine: NSViewRepresentable {
             ]
             tv.insertionPointColor = parent.theme.accent
 
+            for local in localRanges(of: parent.bolds, in: full.length) {
+                tv.textStorage?.addAttribute(
+                    .font, value: NSFont.boldSystemFont(ofSize: 14), range: local)
+            }
             guard let lm = tv.layoutManager else { return }
             lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
-            for local in localRanges(full.length) {
+            for local in localRanges(of: parent.highlights, in: full.length) {
                 lm.addTemporaryAttribute(.backgroundColor,
                                          value: parent.theme.highlighter, forCharacterRange: local)
             }
@@ -830,6 +932,27 @@ struct HighlightableLine: NSViewRepresentable {
 
         /// 待办的「清空全部」清的是整张便签, 跟文字便签一致
         func eraseAll() { apply([], "清空高亮") }
+
+        func isBoldSelection(_ local: NSRange) -> Bool { parent.bolds.coversFully(global(local)) }
+
+        func toggleBold(_ local: NSRange) {
+            guard local.length > 0 else { return }
+            let g = global(local)
+            if parent.bolds.coversFully(g) {
+                applyBolds(parent.bolds.removing(g), "取消加粗")
+            } else {
+                applyBolds(parent.bolds.adding(g), "加粗")
+            }
+        }
+
+        private func applyBolds(_ new: [TextHighlight], _ actionName: String) {
+            let old = parent.bolds
+            guard old != new else { return }
+            parent.bolds = new
+            textView?.undoManager?.registerUndo(withTarget: self) { $0.applyBolds(old, actionName) }
+            textView?.undoManager?.setActionName(actionName)
+            if let textView { render(textView) }
+        }
 
         func hasHighlight(in selection: NSRange) -> Bool {
             let g = global(selection)
@@ -852,10 +975,10 @@ struct HighlightableLine: NSViewRepresentable {
             NSRange(location: r.location + parent.baseOffset, length: r.length)
         }
 
-        /// 整张便签的高亮里, 落在这一条上的部分, 换算成本条的局部范围
-        private func localRanges(_ length: Int) -> [NSRange] {
+        /// 整张便签的标记里, 落在这一条上的部分, 换算成本条的局部范围
+        private func localRanges(of marks: [TextHighlight], in length: Int) -> [NSRange] {
             let line = NSRange(location: parent.baseOffset, length: length)
-            return parent.highlights.compactMap {
+            return marks.compactMap {
                 let overlap = NSIntersectionRange($0.range, line)
                 guard overlap.length > 0 else { return nil }
                 return NSRange(location: overlap.location - parent.baseOffset, length: overlap.length)
@@ -933,6 +1056,7 @@ struct TodoListView: View {
                     text: item.text,
                     baseOffset: range.location,
                     highlights: $note.highlights,
+                    bolds: $note.bolds,
                     theme: note.theme,
                     done: item.done,
                     painting: highlighterMode,
@@ -943,6 +1067,11 @@ struct TodoListView: View {
                         // 已完成的那条是只读的, 点击会落到这里: 点文字取消勾选
                         guard !locked, item.done else { return }
                         withAnimation(.spring(duration: 0.3)) { note.toggleTodo(index) }
+                    }
+                    // NSViewRepresentable 没有文字基线, firstTextBaseline 会退化成
+                    // 按底边对齐导致勾选框和文字错位, 手动给出第一行基线位置
+                    .alignmentGuide(.firstTextBaseline) { _ in
+                        NSFont.systemFont(ofSize: 14).ascender
                     }
             } else {
                 Text(item.text).font(.system(size: 14)).foregroundStyle(ink)
@@ -975,6 +1104,7 @@ struct TodoListView: View {
 struct MarkdownText: View {
     let source: String
     var highlights: [TextHighlight] = []
+    var bolds: [TextHighlight] = []
     let theme: NoteTheme
     var onToggleTask: ((Int) -> Void)? = nil   // 参数是行号
 
@@ -1096,7 +1226,8 @@ struct MarkdownText: View {
     private func paint(_ attr: inout AttributedString, source: String, sourceOffset: Int) {
         let line = NSRange(location: sourceOffset, length: (source as NSString).length)
         let hits = highlights.filter { NSIntersectionRange($0.range, line).length > 0 }
-        guard !hits.isEmpty else { return }
+        let boldHits = bolds.filter { NSIntersectionRange($0.range, line).length > 0 }
+        guard !hits.isEmpty || !boldHits.isEmpty else { return }
 
         let src = source as NSString
         let plain = String(attr.characters)
@@ -1112,7 +1243,7 @@ struct MarkdownText: View {
         }
 
         let chars = attr.characters
-        for hit in hits {
+        func resolved(_ hit: TextHighlight) -> Range<AttributedString.Index>? {
             let overlap = NSIntersectionRange(hit.range, line)
             let local = NSRange(location: overlap.location - sourceOffset, length: overlap.length)
             let inside = map.indices.filter {
@@ -1120,11 +1251,19 @@ struct MarkdownText: View {
             }
             guard let first = inside.first, let last = inside.last,
                   let r = Range(NSRange(location: first, length: last - first + 1), in: plain)
-            else { continue }
+            else { return nil }
             let lo = chars.index(chars.startIndex,
                                  offsetBy: plain.distance(from: plain.startIndex, to: r.lowerBound))
             let hi = chars.index(lo, offsetBy: plain.distance(from: r.lowerBound, to: r.upperBound))
-            attr[lo..<hi].backgroundColor = Color(nsColor: theme.highlighter)
+            return lo..<hi
+        }
+        for hit in hits {
+            guard let r = resolved(hit) else { continue }
+            attr[r].backgroundColor = Color(nsColor: theme.highlighter)
+        }
+        for hit in boldHits {
+            guard let r = resolved(hit) else { continue }
+            attr[r].inlinePresentationIntent = .stronglyEmphasized
         }
     }
 }
