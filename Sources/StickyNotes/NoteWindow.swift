@@ -1,4 +1,5 @@
 import AppKit
+import StickyNotesGeometry
 import SwiftUI
 
 /// 无边框但可输入、可拖动、可缩放的便签窗口
@@ -97,6 +98,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
     private let onDelete: (Note) -> Void
     private let onNewNote: (NoteKind) -> Void
     private var mouseUpMonitor: Any?
+    private var dragTracker = CollapsedWindowDragTracker()
 
     init(note: Note, onDelete: @escaping (Note) -> Void, onNewNote: @escaping (NoteKind) -> Void) {
         self.note = note
@@ -147,9 +149,24 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         }
         applyMode()
 
-        // 拖动松手时把吸附中的折叠条平滑归位
-        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-            self?.settleSnap()
+        // 只有真正拖过窗口的鼠标周期才执行吸附归位。
+        // 展开按钮本身也会产生 mouseUp，不能把普通点击误判为拖动结束；
+        // 否则旧的 30pt 吸附动画会在展开后把窗口再次压扁。
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp]
+        ) { [weak self] event in
+            switch event.type {
+            case .leftMouseDown:
+                self?.dragTracker.mouseDown()
+            case .leftMouseUp:
+                if self?.dragTracker.mouseUpShouldSettle() == true {
+                    // 必须在按钮 action 前同步结束 30pt 吸附归位，
+                    // 否则旧动画会在右侧展开之后再次把窗口压回标题栏高度。
+                    self?.settleSnap(animated: false)
+                }
+            default:
+                break
+            }
             return event
         }
     }
@@ -166,20 +183,51 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
     func toggleCollapse() {
         guard let window else { return }
         if note.isCollapsed {
+            // 展开定位需要知道折叠条来自哪一侧；必须在清除吸附状态前保存。
+            let snappedEdge = note.snappedEdge
+            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             note.isCollapsed = false
-            note.snappedEdge = nil
             window.styleMask.insert(.resizable)
             window.minSize = NSSize(width: 180, height: 120)
-            // 顶边保持不动, 往下展开
-            let target = CGRect(
-                x: window.frame.minX,
-                y: window.frame.maxY - note.expandedFrame.height,
-                width: note.expandedFrame.width,
-                height: note.expandedFrame.height)
+            let target: CGRect
+            if let visibleFrame {
+                let geometryEdge: ExpandedFrameSnapEdge?
+                switch snappedEdge {
+                case .left: geometryEdge = .left
+                case .right: geometryEdge = .right
+                case nil: geometryEdge = nil
+                }
+                target = ExpandedFrameGeometry.targetFrame(
+                    collapsedFrame: window.frame,
+                    savedExpandedFrame: note.expandedFrame,
+                    snappedEdge: geometryEdge,
+                    visibleFrame: visibleFrame)
+            } else {
+                // 理论上窗口总属于某块屏幕；无屏幕信息时保留旧行为作为兜底。
+                target = CGRect(
+                    x: window.frame.minX,
+                    y: window.frame.maxY - note.expandedFrame.height,
+                    width: note.expandedFrame.width,
+                    height: note.expandedFrame.height)
+            }
             window.setFrame(target, display: true, animate: true)
             note.frame = target
+            note.expandedFrame = target
+            note.snappedEdge = nil
         } else {
             note.expandedFrame = window.frame
+            if let visibleFrame = window.screen?.visibleFrame {
+                let detectedEdge = ExpandedFrameGeometry.snappedEdge(
+                    for: window.frame,
+                    visibleFrame: visibleFrame)
+                switch detectedEdge {
+                case .left: note.snappedEdge = .left
+                case .right: note.snappedEdge = .right
+                case nil: note.snappedEdge = nil
+                }
+            } else {
+                note.snappedEdge = nil
+            }
             note.isCollapsed = true
             window.styleMask.remove(.resizable)
             window.minSize = NSSize(width: 120, height: NoteWindowController.barHeight)
@@ -197,13 +245,29 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             .size(withAttributes: [.font: font]).width
         // 52 = 内边距 + 展开按钮 + 呼吸感。
         let width = max(120, ceil(titleWidth) + 52)
-        // 右吸附时保持右边不动，其他情况保持左边不动。
-        let x = note.snappedEdge == .right ? window.frame.maxX - width : window.frame.minX
-        let target = CGRect(
-            x: x,
-            y: window.frame.maxY - NoteWindowController.barHeight,
-            width: width,
-            height: NoteWindowController.barHeight)
+        let target: CGRect
+        if let visibleFrame = window.screen?.visibleFrame {
+            let geometryEdge: ExpandedFrameSnapEdge?
+            switch note.snappedEdge {
+            case .left: geometryEdge = .left
+            case .right: geometryEdge = .right
+            case nil: geometryEdge = nil
+            }
+            target = ExpandedFrameGeometry.collapsedTargetFrame(
+                currentFrame: window.frame,
+                collapsedWidth: width,
+                barHeight: NoteWindowController.barHeight,
+                snappedEdge: geometryEdge,
+                visibleFrame: visibleFrame)
+        } else {
+            // 无屏幕信息时保留旧行为作为兜底。
+            let x = note.snappedEdge == .right ? window.frame.maxX - width : window.frame.minX
+            target = CGRect(
+                x: x,
+                y: window.frame.maxY - NoteWindowController.barHeight,
+                width: width,
+                height: NoteWindowController.barHeight)
+        }
         window.setFrame(target, display: true, animate: animated)
         note.frame = target
         NoteStore.shared.scheduleSave()
@@ -244,9 +308,12 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
 
     // 拖动/缩放后记住位置; 折叠条碰到屏幕左右边缘时吸附。
     // 拖动中只更新形状+触感反馈, 不动窗口位置(否则和手上的拖拽打架会抖),
-    // 松开鼠标后再平滑动画归位贴边。
+    // 松开鼠标后再平滑归位贴边。
     func windowDidMove(_ notification: Notification) {
         guard let window else { return }
+
+        let dragging = NSEvent.pressedMouseButtons & 1 == 1
+        dragTracker.recordMove(isCollapsed: note.isCollapsed, isLeftMousePressed: dragging)
 
         if note.isCollapsed, let screen = window.screen {
             let sf = screen.visibleFrame
@@ -270,7 +337,6 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             }
 
             // 只有非拖拽状态(程序移动/动画)才直接落位
-            let dragging = NSEvent.pressedMouseButtons & 1 == 1
             if !dragging { settleSnap(animated: false) }
         }
 
