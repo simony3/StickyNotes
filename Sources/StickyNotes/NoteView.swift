@@ -13,6 +13,18 @@ struct FrostedGlass: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
+// macOS 27 起 isMovableByWindowBackground 不再把 SwiftUI 顶栏空白处当窗口背景, 显式接管拖动
+struct WindowDragArea: NSViewRepresentable {
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ nsView: DragView, context: Context) {}
+}
+
 struct NoteView: View {
     @ObservedObject var note: Note
     var onClose: () -> Void
@@ -236,7 +248,10 @@ struct NoteView: View {
         .padding(.horizontal, 9)
         .frame(height: 30)
         .background {
-            Color(nsColor: note.theme.bar).opacity(0.5)
+            ZStack {
+                Color(nsColor: note.theme.bar).opacity(0.5)
+                WindowDragArea()
+            }
         }
         .overlay(alignment: .bottom) {
             // 顶栏与正文之间的发丝线
