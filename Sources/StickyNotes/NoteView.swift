@@ -31,6 +31,7 @@ struct NoteView: View {
     var onModeChange: (NoteMode) -> Void
     var onNewNote: (NoteKind) -> Void
     var onToggleCollapse: () -> Void
+    var onTodoHeight: (CGFloat) -> Void
 
     @State private var hovering = false
     @State private var eraseAllToken = 0
@@ -90,6 +91,26 @@ struct NoteView: View {
     // MARK: 顶栏
 
     private var topBar: some View {
+        // 悬停时的整排控件放不下就换收纳版; 窗口能缩到多窄也就只受收纳版约束
+        ViewThatFits(in: .horizontal) {
+            barContent(compact: false)
+            barContent(compact: true)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .background {
+            ZStack {
+                Color(nsColor: note.theme.bar).opacity(0.5)
+                WindowDragArea()
+            }
+        }
+        .overlay(alignment: .bottom) {
+            // 顶栏与正文之间的发丝线
+            Rectangle().fill(ink.opacity(0.06)).frame(height: 0.5)
+        }
+    }
+
+    private func barContent(compact: Bool) -> some View {
         HStack(spacing: 8) {
             if !note.isCollapsed {
             // 关闭(删除)按钮
@@ -134,7 +155,29 @@ struct NoteView: View {
 
             Spacer()
 
-            if !note.isCollapsed && hovering {
+            if !note.isCollapsed && hovering && compact {
+                // 窄便签放不下一排色点, 颜色和窗口模式收进一个菜单;
+                // 荧光笔模式下把位置让给橡皮
+                if !highlighterMode {
+                    Menu {
+                        ForEach(NoteTheme.allCases, id: \.self) { theme in
+                            Button { note.theme = theme } label: {
+                                checkLabel(theme.displayName, note.theme == theme)
+                            }
+                        }
+                        Divider()
+                        modeItems
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(ink.opacity(0.5))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 22)
+                    .help("颜色与窗口模式")
+                }
+            } else if !note.isCollapsed && hovering {
                 // 颜色切换
                 ForEach(NoteTheme.allCases, id: \.self) { theme in
                     Button {
@@ -159,17 +202,7 @@ struct NoteView: View {
 
                 // 窗口模式切换
                 Menu {
-                    ForEach(NoteMode.allCases, id: \.self) { mode in
-                        Button {
-                            onModeChange(mode)
-                        } label: {
-                            if note.mode == mode {
-                                Label(mode.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(mode.displayName)
-                            }
-                        }
-                    }
+                    modeItems
                 } label: {
                     Image(systemName: note.mode.symbol)
                         .font(.system(size: 10, weight: .medium))
@@ -247,17 +280,22 @@ struct NoteView: View {
             .buttonStyle(.plain)
             .help(note.isCollapsed ? "展开便签" : "折叠成一行标题")
         }
-        .padding(.horizontal, 9)
-        .frame(height: 30)
-        .background {
-            ZStack {
-                Color(nsColor: note.theme.bar).opacity(0.5)
-                WindowDragArea()
+    }
+
+    private var modeItems: some View {
+        ForEach(NoteMode.allCases, id: \.self) { mode in
+            Button { onModeChange(mode) } label: {
+                checkLabel(mode.displayName, note.mode == mode)
             }
         }
-        .overlay(alignment: .bottom) {
-            // 顶栏与正文之间的发丝线
-            Rectangle().fill(ink.opacity(0.06)).frame(height: 0.5)
+    }
+
+    @ViewBuilder
+    private func checkLabel(_ title: String, _ checked: Bool) -> some View {
+        if checked {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 
@@ -266,7 +304,8 @@ struct NoteView: View {
     @ViewBuilder
     private var content: some View {
         if note.kind == .todo {
-            TodoListView(note: note, readOnly: note.isPreview, highlighterMode: highlighterMode)
+            TodoListView(note: note, readOnly: note.isPreview, highlighterMode: highlighterMode,
+                         onContentHeight: onTodoHeight)
         } else if note.isPreview {
             ScrollView {
                 MarkdownText(source: note.text, highlights: note.highlights,
@@ -855,11 +894,13 @@ struct HighlightableLine: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: HighlighterTextView,
                       context: Context) -> CGSize? {
-        guard let container = nsView.textContainer, let lm = nsView.layoutManager else { return nil }
+        guard let storage = nsView.textStorage else { return nil }
         let width = proposal.width ?? 200
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        lm.ensureLayout(for: container)
-        return CGSize(width: width, height: max(18, ceil(lm.usedRect(for: container).height)))
+        // 只量不改 textContainer: 它的宽度跟着视图走, 在这里动了换行就会停在试探用的宽度上
+        let height = storage.boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        return CGSize(width: width, height: max(18, ceil(height)))
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
@@ -1010,6 +1051,7 @@ struct TodoListView: View {
     @ObservedObject var note: Note
     var readOnly: Bool = false   // 预览模式: 隐藏添加/删除, 文字不可编辑
     var highlighterMode: Bool = false
+    var onContentHeight: (CGFloat) -> Void = { _ in }
     @State private var newItemText = ""
     @FocusState private var addFieldFocused: Bool
 
@@ -1018,6 +1060,27 @@ struct TodoListView: View {
 
     private var accent: Color { Color(nsColor: note.theme.accent) }
     private var ink: Color { Color(nsColor: note.theme.text) }
+
+    // 行内定宽的部分写成常量, fittingWidth 才能和实际布局对得上
+    private static let padding: CGFloat = 13
+    private static let spacing: CGFloat = 7
+    private static let checkWidth: CGFloat = 16
+    private static let deleteWidth: CGFloat = 10
+
+    /// 让最长那条恰好单行放下的窗口宽度; 超过上限就交给换行
+    static func fittingWidth(for note: Note) -> CGFloat {
+        let textWidth = note.todoItems.indices.map { index -> CGFloat in
+            guard let range = note.todoContentRange(index) else { return 0 }
+            let font = note.bolds.covers(range)
+                ? NSFont.boldSystemFont(ofSize: 14) : NSFont.systemFont(ofSize: 14)
+            return ((note.text as NSString).substring(with: range) as NSString)
+                .size(withAttributes: [.font: font]).width
+        }.max() ?? 0
+        // 勾选框 | 文字 | Spacer | 删除, 相邻两项之间各隔一个 spacing
+        let locked = note.isPreview || note.highlighterMode
+        let chrome = padding * 2 + checkWidth + spacing * 2 + (locked ? 0 : spacing + deleteWidth)
+        return min(max(NoteWindowController.minWidth, ceil(textWidth) + chrome + 2), 360)
+    }
 
     var body: some View {
         ScrollView {
@@ -1028,11 +1091,12 @@ struct TodoListView: View {
 
                 // 底部: 添加新待办 (预览/荧光笔模式下隐藏)
                 if !locked {
-                    HStack(spacing: 7) {
+                    HStack(spacing: Self.spacing) {
                         Image(systemName: "plus.circle")
                             .font(.system(size: 14))
                             .foregroundStyle(ink.opacity(0.3))
-                        TextField("添加待办, 按回车确认", text: $newItemText)
+                            .frame(width: Self.checkWidth)
+                        TextField("添加待办", text: $newItemText)
                             .textFieldStyle(.plain)
                             .font(.system(size: 14))
                             .foregroundStyle(ink)
@@ -1048,13 +1112,16 @@ struct TodoListView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .padding(13)
+            .padding(Self.padding)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onContentHeight($0) }
         }
+        // 高度自动时窗口恰好装下内容, 滚动条只会在展开动画途中闪一下
+        .scrollIndicators(note.manualHeight ? .automatic : .never)
     }
 
     @ViewBuilder
     private func todoRow(index: Int, item: TodoItem) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
+        HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
             // 勾选框
             Button {
                 withAnimation(.spring(duration: 0.3)) { note.toggleTodo(index) }
@@ -1063,6 +1130,7 @@ struct TodoListView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(item.done ? accent.opacity(0.85) : ink.opacity(0.35))
                     .contentTransition(.symbolEffect(.replace))
+                    .frame(width: Self.checkWidth)
             }
             .buttonStyle(.plain)
             .disabled(highlighterMode)
@@ -1104,6 +1172,7 @@ struct TodoListView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(ink.opacity(0.18))
+                        .frame(width: Self.deleteWidth)
                 }
                 .buttonStyle(.plain)
                 .help("删除这一条")

@@ -78,4 +78,20 @@ expect(rightResult == CGRect(x: 1170, y: 294, width: 300, height: 560),
 expect(rightResult.maxX == mainScreen.maxX,
        "right-snapped expanded window should not exceed the visible frame")
 
+expect(ExpandedFrameGeometry.fittedFrame(
+    currentFrame: CGRect(x: 500, y: 600, width: 280, height: 280),
+    size: CGSize(width: 190, height: 110),
+    visibleFrame: mainScreen) == CGRect(x: 500, y: 770, width: 190, height: 110),
+    "fitting to content should keep the top-left corner in place")
+expect(ExpandedFrameGeometry.fittedFrame(
+    currentFrame: CGRect(x: 1190, y: 600, width: 280, height: 280),
+    size: CGSize(width: 190, height: 110),
+    visibleFrame: mainScreen) == CGRect(x: 1280, y: 770, width: 190, height: 110),
+    "fitting a right-aligned window should keep its right edge in place")
+expect(ExpandedFrameGeometry.fittedFrame(
+    currentFrame: CGRect(x: 500, y: 600, width: 280, height: 280),
+    size: CGSize(width: 190, height: 2000),
+    visibleFrame: mainScreen) == CGRect(x: 500, y: 0, width: 190, height: 880),
+    "fitted height should stop at the bottom of the visible frame")
+
 print("StickyNotes geometry checks passed: \(checks)")

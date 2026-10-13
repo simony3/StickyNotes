@@ -230,6 +230,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let value = queryDouble(q["h"]) {
                 frame.size.height = note.isCollapsed ? NoteWindowController.barHeight : max(120, value)
             }
+            if !note.isCollapsed {
+                // 外部指定的尺寸和手动拖的一样算数, 否则会被自动适配立刻改回去
+                if q["w"] != nil { note.manualWidth = true }
+                if q["h"] != nil { note.manualHeight = true }
+            }
             window.setFrame(frame, display: true, animate: true)
             note.frame = frame
             if !note.isCollapsed { note.expandedFrame = frame }

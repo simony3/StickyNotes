@@ -66,8 +66,8 @@ open /Applications/StickyNotes.app
 |---|---|
 | New note | Menu bar 📝 icon, or **+** in a note's top bar (both let you pick the type) |
 | Move | Drag anywhere on the note |
-| Resize | Drag the note's edges |
-| Change color / window mode | Hover over the note's top bar |
+| Resize | Drag the note's edges. To-do notes size themselves to their content by default (wide enough for the longest item on one line, wrapping past 360pt); a dimension you drag stays as you set it, and right-click → "恢复自动适配大小" restores auto-fit |
+| Change color / window mode | Hover over the note's top bar (on narrow notes these fold into the "···" menu) |
 | Edit / preview | ✏️ / 👁 button in the top bar |
 | Collapse / expand | Collapse button at the far right of the top bar |
 | Edge snap | Drag a collapsed bar near the left/right screen edge (snaps within 16pt, drag away to release) |
@@ -99,7 +99,7 @@ The project ships a zero-dependency [MCP](https://modelcontextprotocol.io/) serv
 | `create_note` | Create a note (full parameters: type / color / window mode / collapsed, plus words to highlight or bold) |
 | `update_note` | Change content, color, window mode, preview, or collapsed state by id — and reset highlight/bold marks |
 | `delete_note` | Delete a note (non-empty content is archived automatically) |
-| `move_resize_note` | Move or resize a note window |
+| `move_resize_note` | Move or resize a note window (setting a to-do note's width/height turns off auto-fit for that dimension) |
 | `list_notes` / `list_history` | Read active notes and history, including ids needed by other tools |
 | `restore_note` | Restore an archived item as a note |
 | `delete_history_item` | Permanently delete one history item |

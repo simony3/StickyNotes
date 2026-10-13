@@ -53,6 +53,22 @@ public enum ExpandedFrameGeometry {
             height: barHeight)
     }
 
+    /// 窗口按内容重定尺寸: 顶边不动, 贴着右边缘的保持右边缘, 其余保持左边缘。
+    /// 高度超出屏幕可见区域时封顶, 剩下的交给内容区滚动。
+    public static func fittedFrame(
+        currentFrame: CGRect,
+        size: CGSize,
+        visibleFrame: CGRect
+    ) -> CGRect {
+        let height = min(size.height, max(120, currentFrame.maxY - visibleFrame.minY))
+        let anchorRight = snappedEdge(for: currentFrame, visibleFrame: visibleFrame) == .right
+        return CGRect(
+            x: anchorRight ? currentFrame.maxX - size.width : currentFrame.minX,
+            y: currentFrame.maxY - height,
+            width: size.width,
+            height: height)
+    }
+
     public static func targetFrame(
         collapsedFrame: CGRect,
         savedExpandedFrame: CGRect,

@@ -209,6 +209,9 @@ final class Note: ObservableObject, Identifiable, Codable {
     let kind: NoteKind
     var frame: CGRect
     var expandedFrame: CGRect        // 折叠前的尺寸, 展开时恢复
+    /// 待办便签默认按内容自动定尺寸; 手动拖过的方向以用户拖的为准
+    @Published var manualWidth = false
+    @Published var manualHeight = false
 
     init(id: UUID = UUID(),
          text: String = "",
@@ -263,7 +266,7 @@ final class Note: ObservableObject, Identifiable, Codable {
     // Codable (手动实现, 因为 @Published 不能自动合成)
     enum CodingKeys: String, CodingKey {
         case id, text, kind, theme, mode, isPreview, isCollapsed, snap, highlights, bolds
-        case x, y, w, h, ex, ey, ew, eh
+        case x, y, w, h, ex, ey, ew, eh, mw, mh
     }
 
     convenience init(from decoder: Decoder) throws {
@@ -302,6 +305,8 @@ final class Note: ObservableObject, Identifiable, Codable {
             frame: frame,
             expandedFrame: expanded
         )
+        manualWidth = try c.decodeIfPresent(Bool.self, forKey: .mw) ?? false
+        manualHeight = try c.decodeIfPresent(Bool.self, forKey: .mh) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -324,6 +329,8 @@ final class Note: ObservableObject, Identifiable, Codable {
         try c.encode(expandedFrame.origin.y, forKey: .ey)
         try c.encode(expandedFrame.width, forKey: .ew)
         try c.encode(expandedFrame.height, forKey: .eh)
+        if manualWidth { try c.encode(true, forKey: .mw) }
+        if manualHeight { try c.encode(true, forKey: .mh) }
     }
 }
 

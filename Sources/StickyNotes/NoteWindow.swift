@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import StickyNotesGeometry
 import SwiftUI
 
@@ -13,6 +14,7 @@ final class NoteWindow: NSWindow {
     /// 返回 true 表示这次 Esc 用来退出荧光笔了; 否则照常往下传,
     /// 免得吞掉待办输入框之类地方原本的 Esc。
     var onEscape: (() -> Bool)?
+    var onAutoFit: (() -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
@@ -65,6 +67,11 @@ final class NoteHostingView: NSHostingView<NoteView> {
                           enabled: !note.highlights.isEmpty) { [weak note] in
             note?.highlights = []
         })
+        menu.addItem(.separator())
+        menu.addItem(item("恢复自动适配大小", symbol: "arrow.down.right.and.arrow.up.left",
+                          enabled: note.manualWidth || note.manualHeight) { [weak self] in
+            (self?.window as? NoteWindow)?.onAutoFit?()
+        })
         return menu
     }
 
@@ -99,6 +106,12 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
     private let onNewNote: (NoteKind) -> Void
     private var mouseUpMonitor: Any?
     private var dragTracker = CollapsedWindowDragTracker()
+    private var fitCancellable: AnyCancellable?
+    private var todoContentHeight: CGFloat = 0
+    private var liveResizeStartSize: CGSize?
+    private var expandedMinSize: NSSize {
+        NSSize(width: NoteWindowController.minWidth, height: note.kind == .todo ? 60 : 120)
+    }
 
     init(note: Note, onDelete: @escaping (Note) -> Void, onNewNote: @escaping (NoteKind) -> Void) {
         self.note = note
@@ -115,11 +128,24 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         window.backgroundColor = .clear
         window.hasShadow = true
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 180, height: 120)
         window.isReleasedWhenClosed = false
 
         super.init(window: window)
+        window.minSize = expandedMinSize
         window.delegate = self
+        window.onAutoFit = { [weak self] in
+            guard let self else { return }
+            note.manualWidth = false
+            note.manualHeight = false
+            self.fitToContent()
+            NoteStore.shared.scheduleSave()
+        }
+        if note.kind == .todo {
+            // 改字会改变最长那条的宽度; 等这次修改落到 note 上再量
+            fitCancellable = note.objectWillChange.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.fitToContent() }
+            }
+        }
         window.onToggleHighlighter = { [weak note] in
             guard let note, !note.isCollapsed else { return }
             note.highlighterMode.toggle()
@@ -138,7 +164,14 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
                 self?.applyMode()
             },
             onNewNote: onNewNote,
-            onToggleCollapse: { [weak self] in self?.toggleCollapse() }
+            onToggleCollapse: { [weak self] in self?.toggleCollapse() },
+            onTodoHeight: { [weak self] height in
+                // 回调发生在 SwiftUI 布局途中, 改窗口尺寸要错开这一拍
+                DispatchQueue.main.async {
+                    self?.todoContentHeight = height
+                    self?.fitToContent()
+                }
+            }
         )
         let hosting = NoteHostingView(rootView: view)
         hosting.note = note
@@ -178,6 +211,8 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
     }
 
     static let barHeight: CGFloat = 30
+    /// 收纳版顶栏悬停时最窄 183, 再窄窗口会被 SwiftUI 顶回来
+    static let minWidth: CGFloat = 184
 
     /// 折叠成一行标题 / 展开恢复原尺寸
     func toggleCollapse() {
@@ -188,7 +223,7 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
             let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             note.isCollapsed = false
             window.styleMask.insert(.resizable)
-            window.minSize = NSSize(width: 180, height: 120)
+            window.minSize = expandedMinSize
             let target: CGRect
             if let visibleFrame {
                 let geometryEdge: ExpandedFrameSnapEdge?
@@ -269,6 +304,24 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
                 height: NoteWindowController.barHeight)
         }
         window.setFrame(target, display: true, animate: animated)
+        note.frame = target
+        NoteStore.shared.scheduleSave()
+    }
+
+    /// 待办便签的窗口尺寸跟着内容走; 手动拖过的方向不再自动改
+    func fitToContent() {
+        guard let window, note.kind == .todo, !note.isCollapsed, !window.inLiveResize,
+              let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        else { return }
+        var size = window.frame.size
+        if !note.manualWidth { size.width = TodoListView.fittingWidth(for: note) }
+        if !note.manualHeight, todoContentHeight > 0 {
+            size.height = NoteWindowController.barHeight + todoContentHeight
+        }
+        let target = ExpandedFrameGeometry.fittedFrame(
+            currentFrame: window.frame, size: size, visibleFrame: visibleFrame)
+        guard target != window.frame else { return }
+        window.setFrame(target, display: true)
         note.frame = target
         NoteStore.shared.scheduleSave()
     }
@@ -367,10 +420,21 @@ final class NoteWindowController: NSWindowController, NSWindowDelegate {
         NoteStore.shared.scheduleSave()
     }
 
+    func windowWillStartLiveResize(_ notification: Notification) {
+        // 折叠/展开的动画缩放也会走到这里, 只有按着鼠标拖边缘才算手动
+        liveResizeStartSize = NSEvent.pressedMouseButtons & 1 == 1 ? window?.frame.size : nil
+    }
+
     func windowDidEndLiveResize(_ notification: Notification) {
         if let f = window?.frame {
+            if let start = liveResizeStartSize {
+                if abs(f.width - start.width) > 0.5 { note.manualWidth = true }
+                if abs(f.height - start.height) > 0.5 { note.manualHeight = true }
+            }
             note.frame = f
             NoteStore.shared.scheduleSave()
+            // 只拖了一个方向时, 另一个方向继续跟随内容
+            DispatchQueue.main.async { [weak self] in self?.fitToContent() }
         }
     }
 }

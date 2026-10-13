@@ -147,7 +147,7 @@ BASE_TOOLS = [
     },
     {
         "name": "move_resize_note",
-        "description": "移动或调整指定便签的窗口大小，只传需要改的坐标/尺寸。",
+        "description": "移动或调整指定便签的窗口大小，只传需要改的坐标/尺寸。待办便签默认按内容自动定大小，传了 width/height 后该方向改为固定值。",
         "inputSchema": {
             "type": "object",
             "properties": {
