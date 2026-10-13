@@ -128,6 +128,8 @@ struct NoteView: View {
                     .lineLimit(1)
                     .fixedSize()   // 强制完整显示, 永不省略成 "..."
                     .padding(.leading, 2)
+                    // 折叠条几乎全是标题, 不放行点击就落不到背景的 WindowDragArea 上
+                    .allowsHitTesting(false)
             }
 
             Spacer()
