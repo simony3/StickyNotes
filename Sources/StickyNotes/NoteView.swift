@@ -25,6 +25,57 @@ struct WindowDragArea: NSViewRepresentable {
     func updateNSView(_ nsView: DragView, context: Context) {}
 }
 
+// MARK: - 浮层滚动条
+
+/// 只画滑块不画轨道; 必须声明兼容浮层, 否则 AppKit 会退回传统样式
+final class OverlayScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+}
+
+extension NSScrollView {
+    /// 不管系统「显示滚动条」怎么设, 都用平时隐藏、滚动时淡入的浮层样式
+    func useOverlayScroller() {
+        if !(verticalScroller is OverlayScroller) { verticalScroller = OverlayScroller() }
+        if scrollerStyle != .overlay { scrollerStyle = .overlay }
+    }
+}
+
+/// 系统设置一改, NSScrollView 会自己切回系统样式, 这里锁住
+final class OverlayScrollView: NSScrollView {
+    override var scrollerStyle: NSScroller.Style {
+        get { super.scrollerStyle }
+        set { super.scrollerStyle = .overlay }
+    }
+}
+
+/// SwiftUI 的 ScrollView 拿不到底层 NSScrollView, 垫进内容里顺着父视图找上去
+struct OverlayScrollers: NSViewRepresentable {
+    final class Installer: NSView {
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            enclosingScrollView?.useOverlayScroller()
+            guard observer == nil else { return }
+            // 系统先把样式切回去, 晚一拍再改回浮层
+            observer = NotificationCenter.default.addObserver(
+                forName: NSScroller.preferredScrollerStyleDidChangeNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                DispatchQueue.main.async { self?.enclosingScrollView?.useOverlayScroller() }
+            }
+        }
+
+        deinit { observer.map(NotificationCenter.default.removeObserver) }
+    }
+
+    func makeNSView(context: Context) -> Installer { Installer() }
+    func updateNSView(_ nsView: Installer, context: Context) {
+        nsView.enclosingScrollView?.useOverlayScroller()
+    }
+}
+
 struct NoteView: View {
     @ObservedObject var note: Note
     var onClose: () -> Void
@@ -313,6 +364,7 @@ struct NoteView: View {
                              onToggleTask: { note.toggleTaskLine($0) })
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
+                    .background(OverlayScrollers())
             }
         } else {
             HighlightedTextEditor(
@@ -352,11 +404,12 @@ struct HighlightedTextEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = OverlayScrollView()
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
+        scrollView.useOverlayScroller()
 
         let textView = HighlighterTextView()
         textView.delegate = context.coordinator
@@ -1113,6 +1166,7 @@ struct TodoListView: View {
                 }
             }
             .padding(Self.padding)
+            .background(OverlayScrollers())
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onContentHeight($0) }
         }
         // 高度自动时窗口恰好装下内容, 滚动条只会在展开动画途中闪一下
