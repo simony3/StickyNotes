@@ -105,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func createNote(kind: NoteKind, text: String = "", theme: NoteTheme? = nil,
+    private func createNote(id: UUID = UUID(), kind: NoteKind, text: String = "", theme: NoteTheme? = nil,
                             mode: NoteMode = .floating, preview: Bool = false,
                             collapsed: Bool = false,
                             highlights: [TextHighlight] = [],
@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? NoteTheme.allCases.first { !usedThemes.contains($0) }
             ?? NoteTheme.allCases[NoteStore.shared.notes.count % NoteTheme.allCases.count]
 
-        let note = Note(text: text, kind: kind, theme: nextTheme,
+        let note = Note(id: id, text: text, kind: kind, theme: nextTheme,
                         mode: mode, isPreview: preview,
                         highlights: highlights, bolds: bolds, frame: frame)
         NoteStore.shared.add(note)
@@ -141,15 +141,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     //
     // 创建:
     //   open "stickynotes://add?kind=todo&theme=mint&text=%E5%86%85%E5%AE%B9"
-    // 参数: kind=text|todo, theme=lemon|peach|mint|sky|lilac,
+    // 参数: id=<UUID, 可选, 由调用方指定便于回查>, kind=text|todo, theme=lemon|peach|mint|sky|lilac,
     //       mode=floating|normal|desktop, preview=1, collapsed=1, text=百分号编码内容,
     //       highlight/bold=荧光和加粗范围, 格式 "起点,长度;起点,长度" (UTF-16), 空串=清空
     // 更新: stickynotes://update?id=<UUID>&text=...&theme=...&mode=...&preview=0|1&collapsed=0|1
     //       &highlight=...&bold=...  (改了 text 又不传标记, 旧标记会被清空)
+    // 待办逐条: stickynotes://todo?id=<UUID>&check=条目&uncheck=条目&remove=条目&add=新条目
+    //       (各参数可重复; 按条目文字点名, 规则见 Note.todoIndex(matching:))
     // 删除: stickynotes://delete?id=<UUID>
     // 恢复: stickynotes://restore?id=<历史记录 UUID>
     // 删除历史: stickynotes://history-delete?id=<历史记录 UUID>
-    // 移动/缩放: stickynotes://frame?id=<UUID>&x=...&y=...&w=...&h=...
+    // 移动/缩放: stickynotes://frame?id=<UUID>&x=...&y=...&w=...&h=...&auto=1 (auto=恢复自动适配)
+    // 回执: 任一命令带 ack=<随机串>, 处理完先落盘再把它写进数据目录的 mcp-ack
 
     private var lastURLHandled = Date.distantPast
 
@@ -164,11 +167,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var q: [String: String] = [:]
         comps.queryItems?.forEach { q[$0.name] = $0.value }
+        // 没改到东西也照常落盘回执, 调用方靠回执判断命令已处理完, 再去读最新数据
+        defer {
+            NoteStore.shared.saveNow()
+            if let ack = q["ack"] { NoteStore.shared.writeAck(ack) }
+        }
 
         switch url.host {
         case "add":
+            let id = UUID(uuidString: q["id"] ?? "") ?? UUID()
+            guard !NoteStore.shared.notes.contains(where: { $0.id == id }) else { return }
             let text = q["text"] ?? ""
             createNote(
+                id: id,
                 kind: NoteKind(rawValue: q["kind"] ?? "") ?? .text,
                 text: text,
                 theme: NoteTheme(rawValue: q["theme"] ?? ""),
@@ -195,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 note.mode = mode
                 controllers[id]?.applyMode()
             }
-            if note.kind == .text, let preview = queryBool(q["preview"]) {
+            if let preview = queryBool(q["preview"]) {
                 note.isPreview = preview
             }
             if let collapsed = queryBool(q["collapsed"]), collapsed != note.isCollapsed {
@@ -204,6 +215,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // 折叠条宽度跟随新标题重算，不需要先展开再折叠。
                 controllers[id]?.refreshCollapsedWidth()
             }
+
+        case "todo":
+            guard let idStr = q["id"], let id = UUID(uuidString: idStr),
+                  let note = NoteStore.shared.notes.first(where: { $0.id == id }),
+                  note.kind == .todo else { return }
+            func values(_ name: String) -> [String] {
+                (comps.queryItems ?? []).filter { $0.name == name }.compactMap(\.value)
+            }
+            for (name, done) in [("check", true), ("uncheck", false)] {
+                for needle in values(name) {
+                    if let i = note.todoIndex(matching: needle), note.todoItems[i].done != done {
+                        note.toggleTodo(i)
+                    }
+                }
+            }
+            for needle in values("remove") {
+                if let i = note.todoIndex(matching: needle) { note.removeTodo(i) }
+            }
+            values("add").forEach(note.addTodo)
+            if note.isCollapsed { controllers[id]?.refreshCollapsedWidth() }
 
         case "delete":
             guard let idStr = q["id"], let id = UUID(uuidString: idStr),
@@ -226,9 +257,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var frame = window.frame
             if let value = queryDouble(q["x"]) { frame.origin.x = value }
             if let value = queryDouble(q["y"]) { frame.origin.y = value }
-            if let value = queryDouble(q["w"]) { frame.size.width = max(120, value) }
+            if let value = queryDouble(q["w"]) { frame.size.width = max(window.minSize.width, value) }
             if let value = queryDouble(q["h"]) {
-                frame.size.height = note.isCollapsed ? NoteWindowController.barHeight : max(120, value)
+                frame.size.height = note.isCollapsed
+                    ? NoteWindowController.barHeight : max(window.minSize.height, value)
             }
             if !note.isCollapsed {
                 // 外部指定的尺寸和手动拖的一样算数, 否则会被自动适配立刻改回去
@@ -238,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrame(frame, display: true, animate: true)
             note.frame = frame
             if !note.isCollapsed { note.expandedFrame = frame }
+            if queryBool(q["auto"]) == true { (window as? NoteWindow)?.onAutoFit?() }
             NoteStore.shared.scheduleSave()
 
         case "show-all":

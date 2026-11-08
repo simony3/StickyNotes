@@ -441,6 +441,14 @@ extension Note {
         writeTodos(items, keeping: carried)
     }
 
+    /// 外部按文字点名某条待办: 先找完全相同的, 否则要求只有一条包含它; 有歧义就不动
+    func todoIndex(matching needle: String) -> Int? {
+        let items = todoItems
+        if let i = items.firstIndex(where: { $0.text == needle }) { return i }
+        let hits = items.indices.filter { items[$0].text.localizedCaseInsensitiveContains(needle) }
+        return hits.count == 1 ? hits[0] : nil
+    }
+
     /// 第 index 条待办的文字在 text 里的范围 (不含 "[ ] " 前缀和行首空格)
     func todoContentRange(_ index: Int) -> NSRange? {
         var offset = 0, item = 0
@@ -615,6 +623,10 @@ final class NoteStore: ObservableObject {
         let item = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+    }
+
+    func writeAck(_ token: String) {
+        try? token.write(to: dir.appendingPathComponent("mcp-ack"), atomically: true, encoding: .utf8)
     }
 
     func saveNow() {

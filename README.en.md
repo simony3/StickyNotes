@@ -96,18 +96,19 @@ The project ships a zero-dependency [MCP](https://modelcontextprotocol.io/) serv
 
 | Tool | Description |
 |---|---|
-| `create_note` | Create a note (full parameters: type / color / window mode / collapsed, plus words to highlight or bold) |
+| `create_note` | Create a note (full parameters: type / color / window mode / collapsed, plus words to highlight or bold) and return its id |
 | `update_note` | Change content, color, window mode, preview, or collapsed state by id — and reset highlight/bold marks |
+| `update_todos` | Check, uncheck, remove, or append to-do items, picked by their text; only the named items change, so your edits elsewhere are never overwritten |
 | `delete_note` | Delete a note (non-empty content is archived automatically) |
-| `move_resize_note` | Move or resize a note window (setting a to-do note's width/height turns off auto-fit for that dimension) |
-| `list_notes` / `list_history` | Read active notes and history, including ids needed by other tools |
+| `move_resize_note` | Move or resize a note window (macOS coordinates, origin at the bottom-left of the main screen); setting a to-do note's width/height turns off auto-fit for that dimension, `auto_size` turns it back on |
+| `list_notes` / `list_history` | Read active notes and history, including ids needed by other tools; history can be filtered by keyword and limited |
 | `restore_note` | Restore an archived item as a note |
 | `delete_history_item` | Permanently delete one history item |
 | `show_all_notes` / `show_history` | Bring notes forward or open the history window |
 
 Marks are specified by text, not offsets: `highlight: ["key point"]` paints every occurrence of "key point" in the note, and `bold` works the same way; pass `[]` to clear. When `update_note` only replaces the text, existing highlights and bold runs are re-anchored by the words they covered, so an AI rewording one sentence doesn't wipe them all.
 
-Everyday changes are sent to the running app as granular commands, so the MCP server neither rewrites the JSON database nor restarts the app. The bulk migration/recovery tools `admin_export_data` and `admin_overwrite_data` are hidden by default. Set `STICKYNOTES_ENABLE_ADMIN_TOOLS=1` for the MCP process to expose them; an overwrite also requires an exact data revision and explicit confirmation.
+Everyday changes are sent to the running app as granular commands, so the MCP server neither rewrites the JSON database nor restarts the app. Each command waits for the app's acknowledgement and checks the result before returning, so failures such as an unknown id are reported instead of silently ignored. The bulk migration/recovery tools `admin_export_data` and `admin_overwrite_data` are hidden by default. Set `STICKYNOTES_ENABLE_ADMIN_TOOLS=1` for the MCP process to expose them; an overwrite also requires an exact data revision and explicit confirmation.
 
 **Setup (Codex desktop)** — append to `~/.codex/config.toml`:
 
