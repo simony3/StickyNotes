@@ -906,6 +906,7 @@ struct HighlightableLine: NSViewRepresentable {
     let editable: Bool    // 平时: 可以直接改字
     var onEdit: (String) -> Void
     var onExitMode: () -> Void
+    var onReturn: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -969,6 +970,14 @@ struct HighlightableLine: NSViewRepresentable {
                       replacementString: String?) -> Bool {
             guard parent.editable, !parent.painting else { return false }
             return replacementString?.contains("\n") != true
+        }
+
+        /// 回车不换行, 交给外面在这一条下方开新行; 输入法选词时的回车不走这里
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)),
+                  parent.editable, !parent.painting else { return false }
+            parent.onReturn()
+            return true
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1107,9 +1116,45 @@ struct TodoListView: View {
     var onContentHeight: (CGFloat) -> Void = { _ in }
     @State private var newItemText = ""
     @FocusState private var addFieldFocused: Bool
+    /// 新行插在第几条前面; nil = 没开新行
+    @State private var draftIndex: Int?
 
     /// 荧光笔模式下待办同样是只读的
     private var locked: Bool { readOnly || highlighterMode }
+
+    private enum Row: Hashable { case item(Int), draft }
+
+    /// 清单空着时新行常驻, 否则只在回车或点底部空白后出现
+    private var draftAt: Int? {
+        guard !locked else { return nil }
+        let count = note.todoItems.count
+        if let draftIndex { return min(draftIndex, count) }
+        return count == 0 ? 0 : nil
+    }
+
+    private var rows: [Row] {
+        var rows = note.todoItems.indices.map(Row.item)
+        // 新行用固定 id, 连续输入时它往下挪也还是同一个输入框, 焦点不会丢
+        if let at = draftAt { rows.insert(.draft, at: at) }
+        return rows
+    }
+
+    private func openDraft(at index: Int) {
+        newItemText = ""
+        draftIndex = index
+        DispatchQueue.main.async { addFieldFocused = true }
+    }
+
+    private func closeDraft() {
+        newItemText = ""
+        draftIndex = nil
+        addFieldFocused = false
+    }
+
+    private func commitDraft() {
+        guard let at = draftAt else { return }
+        withAnimation(.spring(duration: 0.3)) { note.insertTodo(newItemText, at: at) }
+    }
 
     private var accent: Color { Color(nsColor: note.theme.accent) }
     private var ink: Color { Color(nsColor: note.theme.text) }
@@ -1138,39 +1183,60 @@ struct TodoListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(note.todoItems.enumerated()), id: \.offset) { index, item in
-                    todoRow(index: index, item: item)
+                let items = note.todoItems
+                ForEach(rows, id: \.self) { row in
+                    switch row {
+                    case .item(let index): todoRow(index: index, item: items[index])
+                    case .draft: draftRow
+                    }
                 }
 
-                // 底部: 添加新待办 (预览/荧光笔模式下隐藏)
-                if !locked {
-                    HStack(spacing: Self.spacing) {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 14))
-                            .foregroundStyle(ink.opacity(0.3))
-                            .frame(width: Self.checkWidth)
-                        TextField("添加待办", text: $newItemText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 14))
-                            .foregroundStyle(ink)
-                            .focused($addFieldFocused)
-                            .onSubmit {
-                                withAnimation(.spring(duration: 0.3)) {
-                                    note.addTodo(newItemText)
-                                }
-                                newItemText = ""
-                                addFieldFocused = true   // 连续输入
-                            }
-                    }
-                    .padding(.vertical, 6)
+                // 底部留白: 点一下在末尾开新行 (全部打勾后没有能回车的条目, 靠这里追加)
+                if !locked && draftAt == nil {
+                    Color.clear
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Self.padding - 3)
+                        .contentShape(Rectangle())
+                        .onTapGesture { openDraft(at: items.count) }
                 }
             }
-            .padding(Self.padding)
+            .padding([.horizontal, .top], Self.padding)
+            .padding(.bottom, !locked && draftAt == nil ? 0 : Self.padding)
             .background(OverlayScrollers())
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onContentHeight($0) }
         }
         // 高度自动时窗口恰好装下内容, 滚动条只会在展开动画途中闪一下
         .scrollIndicators(note.manualHeight ? .automatic : .never)
+        .onChange(of: locked) { if locked { closeDraft() } }
+    }
+
+    private var draftRow: some View {
+        HStack(spacing: Self.spacing) {
+            Image(systemName: "plus.circle")
+                .font(.system(size: 14))
+                .foregroundStyle(ink.opacity(0.3))
+                .frame(width: Self.checkWidth)
+            TextField("添加待办", text: $newItemText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .foregroundStyle(ink)
+                .focused($addFieldFocused)
+                .onSubmit {
+                    // 空行回车 = 结束连续输入
+                    guard !newItemText.trimmingCharacters(in: .whitespaces).isEmpty,
+                          let at = draftAt else { closeDraft(); return }
+                    commitDraft()
+                    openDraft(at: at + 1)
+                }
+                .onExitCommand { closeDraft() }
+                .onChange(of: addFieldFocused) {
+                    // 点到别处: 写了字就留下, 没写就收起
+                    guard !addFieldFocused, draftIndex != nil else { return }
+                    commitDraft()
+                    closeDraft()
+                }
+        }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -1201,7 +1267,8 @@ struct TodoListView: View {
                     painting: highlighterMode,
                     editable: !locked,
                     onEdit: { note.setTodoText(index, $0) },
-                    onExitMode: { note.highlighterMode = false })
+                    onExitMode: { note.highlighterMode = false },
+                    onReturn: { openDraft(at: index + 1) })
                     .onTapGesture {
                         // 已完成的那条是只读的, 点击会落到这里: 点文字取消勾选
                         guard !locked, item.done else { return }

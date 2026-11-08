@@ -419,12 +419,21 @@ extension Note {
         rebuildText(items)
     }
 
-    func addTodo(_ itemText: String) {
+    func addTodo(_ itemText: String) { insertTodo(itemText, at: todoItems.count) }
+
+    func insertTodo(_ itemText: String, at index: Int) {
         let t = itemText.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
         var items = todoItems
-        items.append(TodoItem(text: t, done: false))
-        writeTodos(items)
+        let at = min(max(0, index), items.count)
+        // 插入点及之后的条目整体后移一位, 它们的标记跟着走
+        func shifted(_ list: [HighlightAnchor]) -> [HighlightAnchor] {
+            list.map { HighlightAnchor(item: $0.item >= at ? $0.item + 1 : $0.item,
+                                       offset: $0.offset, length: $0.length) }
+        }
+        let carried = (h: shifted(anchors(of: highlights)), b: shifted(anchors(of: bolds)))
+        items.insert(TodoItem(text: t, done: false), at: at)
+        writeTodos(items, keeping: carried)
     }
 
     func removeTodo(_ index: Int) {
